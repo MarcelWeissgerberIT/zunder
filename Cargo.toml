@@ -1,0 +1,82 @@
+[package]
+name = "zunder"
+version = "0.1.0"
+edition = "2021"
+description = "Zunder – ein schneller, schlichter Webbrowser für den Mac (Rust-Hülle, WebKit-Engine)"
+publish = false
+
+[[bin]]
+name = "zunder"
+path = "src/main.rs"
+
+[features]
+# Prüfhilfe: Befehle über die Standardeingabe und Umgebungsvariablen zum Prüfen
+# (siehe src/dev.rs). Gehört nie in die ausgelieferte App.
+harness = []
+
+[dependencies]
+tao = "0.37"
+# Genau diese Fassung: Zunder rüstet die Delegate-Klassen von wry zur Laufzeit
+# nach (src/native.rs) – eine andere Fassung muss erst geprüft werden.
+wry = { version = "=0.57.3", features = ["devtools"] }
+muda = "0.21"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+# Übersetzt kodierte Rechnernamen (xn--…) zurück – für die Warnung vor täuschend
+# ähnlichen Adressen (ohnehin im Baum, über url).
+idna = "1"
+dirs = "7"
+rusqlite = "0.43"
+ureq = "2"
+# Schlüsselbund von macOS – dort liegen der API-Schlüssel für den Assistenten
+# und der Schlüssel des Passwort-Tresors.
+security-framework = "3"
+# Verschlüsselung der gesicherten Passwörter (ohnehin im Baum, über ureq/rustls).
+ring = "0.17"
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "objc2-core-foundation",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+    "NSArray",
+    "NSError",
+    "NSDictionary",
+    "NSBundle",
+    "NSLocale",
+    "NSData",
+    "NSValue",
+    "NSRange",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSView",
+    "NSWindow",
+    "NSResponder",
+    "NSGraphics",
+    "NSApplication",
+] }
+objc2-web-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "objc2-app-kit",
+    "WKWebView",
+    "WKWebViewConfiguration",
+    "WKWebsiteDataStore",
+    "WKPreferences",
+    "WKUserContentController",
+    "WKContentRuleList",
+    "WKContentRuleListStore",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+debug = false
+incremental = false

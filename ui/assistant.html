@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<title>Zunder</title>
+<link rel="stylesheet" href="chrome.css">
+<link rel="stylesheet" href="assistant.css">
+</head>
+<body>
+<!--ICONS-->
+
+<div id="side">
+  <header id="head">
+    <svg class="ic mark"><use href="#i-sparkle"/></svg>
+    <h1 id="title"></h1>
+    <button id="clear" class="ibtn" type="button" hidden><svg class="ic"><use href="#i-trash"/></svg></button>
+    <button id="close" class="ibtn" type="button"><svg class="ic"><use href="#i-close"/></svg></button>
+  </header>
+
+  <div id="pageline" hidden>
+    <svg class="ic sm"><use id="pageline-icon" href="#i-globe"/></svg>
+    <span id="pagetitle"></span>
+    <button id="compare-end" class="ibtn sm" type="button" hidden><svg class="ic sm"><use href="#i-close"/></svg></button>
+  </div>
+
+  <main id="chat">
+    <div id="intro"></div>
+    <div id="log"></div>
+  </main>
+
+  <main id="models" hidden>
+    <div id="models-note" hidden></div>
+    <div id="models-list"></div>
+    <p id="disclaimer"></p>
+    <div id="models-buttons">
+      <button id="recheck" class="tbtn" type="button"></button>
+      <button id="models-done" class="tbtn primary" type="button"></button>
+    </div>
+  </main>
+
+  <main id="pick" hidden>
+    <h2 id="pick-intro"></h2>
+    <p id="pick-hint"></p>
+    <div id="pick-list"></div>
+    <div id="pick-split">
+      <div class="txt">
+        <div id="pick-split-label"></div>
+        <div id="pick-split-hint" class="h"></div>
+      </div>
+      <button id="pick-split-switch" class="switch" type="button"></button>
+    </div>
+    <input id="pick-focus" type="text" autocomplete="off">
+    <div id="pick-buttons">
+      <button id="pick-cancel" class="tbtn" type="button"></button>
+      <button id="pick-go" class="tbtn primary" type="button"></button>
+    </div>
+  </main>
+
+  <footer id="composer">
+    <div id="quick" hidden></div>
+    <div id="field">
+      <textarea id="input" rows="1" autocomplete="off" autocorrect="off"></textarea>
+      <button id="send" type="button" disabled><svg class="ic sm"><use id="send-icon" href="#i-send"/></svg></button>
+    </div>
+    <button id="engine" type="button">
+      <svg class="ic sm"><use id="engine-icon" href="#i-info"/></svg>
+      <span id="engine-text"></span>
+      <svg class="ic sm chev"><use href="#i-chevron-down"/></svg>
+    </button>
+  </footer>
+</div>
+
+<!--DATA-->
+<script src="assistant.js"></script>
+</body>
+</html>

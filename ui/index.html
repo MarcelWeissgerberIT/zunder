@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<title>Zunder</title>
+<link rel="stylesheet" href="chrome.css">
+</head>
+<body class="{{boot}}">
+<!--ICONS-->
+
+<!-- Ladebild beim Start: fünf Sekunden, währenddessen laden die Seiten schon. -->
+<div id="splash" aria-hidden="true">
+  <img class="back" id="splash-still" alt="">
+  <video class="back" id="splash-video" muted playsinline preload="auto" disablepictureinpicture></video>
+  <div class="veil"></div>
+  <div class="embers" id="splash-embers"></div>
+  <div class="core">
+    <div class="mark"><img src="appicon.png" alt=""></div>
+    <div class="word"><span>Z</span><span>u</span><span>n</span><span>d</span><span>e</span><span>r</span></div>
+    <div class="line" id="splash-line"></div>
+    <div class="bar"><i></i></div>
+  </div>
+  <div class="skip" id="splash-skip"></div>
+</div>
+
+<div id="chrome">
+  <div id="tabstrip">
+    <div id="tabs"></div>
+    <button id="newtab" class="ibtn" type="button"><svg class="ic"><use href="#i-plus"/></svg></button>
+    <div id="dragfill"></div>
+    <button id="overview" class="ibtn" type="button"><svg class="ic"><use href="#i-grid"/></svg></button>
+    <button id="alltabs" class="ibtn" type="button" hidden><svg class="ic"><use href="#i-tabs"/></svg></button>
+    <div id="private-badge" hidden><svg class="ic sm"><use id="private-icon" href="#i-private"/></svg><span></span></div>
+  </div>
+
+  <div id="toolbar">
+    <button id="back" class="ibtn" type="button" disabled><svg class="ic"><use href="#i-back"/></svg></button>
+    <button id="forward" class="ibtn" type="button" disabled><svg class="ic"><use href="#i-forward"/></svg></button>
+    <button id="reload" class="ibtn" type="button"><svg class="ic"><use id="reload-icon" href="#i-reload"/></svg></button>
+    <div id="address">
+      <span id="security"><svg class="ic sm"><use id="security-icon" href="#i-search"/></svg></span>
+      <div id="urlbox">
+        <input id="url" type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">
+        <div id="url-show" aria-hidden="true"><span class="pre"><span></span></span><span class="dom"></span><span class="rest"></span></div>
+      </div>
+      <button id="shield" class="ibtn sm" type="button" hidden><svg class="ic sm"><use href="#i-shield"/></svg><span id="shield-n"></span></button>
+      <button id="mobile" class="ibtn sm on" type="button" hidden><svg class="ic sm"><use href="#i-phone"/></svg></button>
+      <button id="reader" class="ibtn sm" type="button" hidden><svg class="ic sm"><use href="#i-reader"/></svg></button>
+      <button id="key" class="ibtn sm" type="button" hidden><svg class="ic sm"><use href="#i-key"/></svg><i id="key-dot"></i></button>
+      <button id="star" class="ibtn sm" type="button" hidden><svg class="ic sm"><use id="star-icon" href="#i-star"/></svg></button>
+    </div>
+    <button id="downloads" class="ibtn" type="button" hidden><svg class="ic"><use href="#i-download"/></svg><i id="downloads-dot"></i></button>
+    <button id="assistant" class="ibtn" type="button"><svg class="ic"><use href="#i-sparkle"/></svg></button>
+    <button id="menu" class="ibtn" type="button"><svg class="ic"><use href="#i-menu"/></svg></button>
+    <div id="progress"><div id="progress-bar"></div></div>
+  </div>
+
+  <div id="bmbar" hidden></div>
+  <div id="splitbar" hidden></div>
+
+  <div id="findbar" hidden>
+    <svg class="ic sm"><use href="#i-search"/></svg>
+    <input id="find-input" type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">
+    <span id="find-count"></span>
+    <button id="find-prev" class="ibtn sm" type="button"><svg class="ic sm flip"><use href="#i-chevron-down"/></svg></button>
+    <button id="find-next" class="ibtn sm" type="button"><svg class="ic sm"><use href="#i-chevron-down"/></svg></button>
+    <button id="find-close" class="ibtn sm" type="button"><svg class="ic sm"><use href="#i-close"/></svg></button>
+  </div>
+
+  <div id="notice" hidden>
+    <svg class="ic sm"><use id="notice-icon" href="#i-info"/></svg>
+    <span id="notice-text"></span>
+    <button id="notice-action" class="tbtn" type="button" hidden></button>
+    <button id="notice-close" class="ibtn sm" type="button"><svg class="ic sm"><use href="#i-close"/></svg></button>
+  </div>
+</div>
+
+<div id="overlay">
+  <div id="scrim"></div>
+  <div id="suggest" hidden></div>
+  <div id="popup" hidden></div>
+  <div id="tabgrid" hidden>
+    <div id="tg-head">
+      <svg class="ic sm"><use href="#i-search"/></svg>
+      <input id="tg-input" type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">
+      <button id="tg-close" class="ibtn" type="button"><svg class="ic"><use href="#i-close"/></svg></button>
+    </div>
+    <div id="tg-cards"></div>
+  </div>
+  <div id="tabsearch" hidden>
+    <div id="ts-field">
+      <svg class="ic sm"><use href="#i-search"/></svg>
+      <input id="ts-input" type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">
+    </div>
+    <div id="ts-list"></div>
+  </div>
+  <aside id="panel" hidden>
+    <header>
+      <h1 id="panel-title"></h1>
+      <button id="panel-extra" class="tbtn" type="button" hidden></button>
+      <button id="panel-close" class="ibtn" type="button"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div id="panel-search" hidden>
+      <svg class="ic sm"><use href="#i-search"/></svg>
+      <input id="panel-query" type="text" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">
+    </div>
+    <div id="panel-body"></div>
+  </aside>
+</div>
+
+<!--DATA-->
+<script src="chrome.js"></script>
+</body>
+</html>

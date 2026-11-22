@@ -1,0 +1,697 @@
+/* Interne Seiten: Startseite und Fehlerseite. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #faf9f7;
+  --text: #1e1d1b;
+  --muted: #76716b;
+  --tile: #ffffff;
+  --tile-line: rgba(0, 0, 0, 0.08);
+  --hover: rgba(0, 0, 0, 0.05);
+  --accent: #e8590c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1a19;
+    --text: #f2efeb;
+    --muted: #9f9992;
+    --tile: #2a2826;
+    --tile-line: rgba(255, 255, 255, 0.08);
+    --hover: rgba(255, 255, 255, 0.07);
+    --accent: #ff8a3d;
+  }
+}
+
+body.private {
+  color-scheme: dark;
+  --bg: #161226;
+  --text: #f1edfa;
+  --muted: #a79fbd;
+  --tile: #241d38;
+  --tile-line: rgba(255, 255, 255, 0.08);
+  --hover: rgba(255, 255, 255, 0.07);
+  --accent: #b692ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+main {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 9vh 28px 60px;
+}
+
+#logo {
+  display: block;
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 34px;
+}
+
+h2 {
+  margin: 30px 4px 12px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 8px 12px;
+  border-radius: 14px;
+  color: inherit;
+  text-decoration: none;
+  width: 116px;
+}
+
+.tile:hover {
+  background: var(--hover);
+}
+
+.tile .icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 13px;
+  background: var(--tile);
+  box-shadow: 0 0 0 1px var(--tile-line), 0 2px 6px rgba(0, 0, 0, 0.06);
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  font-weight: 650;
+  color: #fff;
+  overflow: hidden;
+}
+
+.tile .icon img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+
+.tile .label {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+
+/* ---- Schreibtisch: anordnen und Ordner -------------------------------------- */
+
+.tile.folder {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: default;
+}
+
+.tile.folder:hover {
+  background: var(--hover);
+}
+
+.tile .icon.stack {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 3px;
+  padding: 7px;
+  box-sizing: border-box;
+}
+
+.tile .mini {
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 650;
+  color: #fff;
+  overflow: hidden;
+}
+
+.tile .mini img {
+  width: 17px;
+  height: 17px;
+}
+
+.tile.dragging {
+  opacity: 0.35;
+}
+
+.tile.drop {
+  background: var(--hover);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.tile.folder.drop {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+#desk-folder {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.28);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+#desk-folder[hidden] {
+  display: none;
+}
+
+#desk-folder.drop {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+#desk-folder .win {
+  width: min(680px, calc(100vw - 80px));
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  padding: 18px 22px 16px;
+  border-radius: 22px;
+  background: var(--bg);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+}
+
+#desk-folder h3 {
+  margin: 2px 0 12px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+#desk-folder .out {
+  margin: 12px 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+/* Wohin die Kachel wirklich führt – der Titel darüber stammt von der Seite. */
+.tile .where {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: -2px;
+}
+
+body.walled .tile .where {
+  color: inherit;
+  opacity: 0.8;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+#hint {
+  margin: 44px 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#private {
+  max-width: 520px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+/* ---- Stealth-Fenster ------------------------------------------------------- */
+
+body.stealth {
+  --bg: #0b110e;
+  --text: #e8f3ec;
+  --muted: #8fa89a;
+  --tile: #141d18;
+  --accent: #5fd39a;
+}
+
+#stealth {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+#stealth .mark {
+  display: block;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto;
+  color: var(--accent);
+}
+
+#stealth h1 {
+  margin: 12px 0 8px;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-align: center;
+}
+
+#stealth .lead {
+  margin: 0 0 22px;
+  color: var(--muted);
+  text-align: center;
+}
+
+#stealth ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+#stealth li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: var(--tile);
+  border: 1px solid var(--tile-line);
+}
+
+#stealth li svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+#stealth li.open svg {
+  color: #f0b24a;
+}
+
+#stealth li b {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+#stealth li span {
+  color: var(--muted);
+}
+
+#stealth-how {
+  margin: 10px 0 0;
+  padding: 11px 14px;
+  border-radius: 12px;
+  border: 1px dashed var(--tile-line);
+}
+
+#stealth-how p {
+  margin: 0 0 7px;
+  color: var(--muted);
+}
+
+#stealth-how code {
+  display: block;
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text);
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+#stealth .note {
+  margin: 18px 0 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+#private svg {
+  width: 56px;
+  height: 56px;
+  color: var(--accent);
+}
+
+#private h1 {
+  margin: 14px 0 10px;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+#private p {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* ---- Live-Hintergrund der Startseite -------------------------------------- */
+
+#wall {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background: #111;
+}
+
+#wall-still,
+#wall-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+#wall-video {
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+#wall-video.on {
+  opacity: 1;
+}
+
+/* Ein Schleier hält die Kacheln lesbar: oben und in der Mitte etwas dichter. */
+#wall-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.34), rgba(0, 0, 0, 0.16) 55%, rgba(0, 0, 0, 0.3));
+}
+
+body.wall-light #wall-shade {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.12) 55%, rgba(255, 255, 255, 0.24));
+}
+
+body.walled main {
+  position: relative;
+  z-index: 1;
+}
+
+/* Auf dunklen Motiven helle Schrift, auf hellen dunkle – unabhängig vom System. */
+body.walled {
+  color-scheme: dark;
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.78);
+  --tile: rgba(255, 255, 255, 0.16);
+  --tile-line: rgba(255, 255, 255, 0.22);
+  --hover: rgba(255, 255, 255, 0.14);
+}
+
+body.walled.wall-light {
+  color-scheme: light;
+  --text: #1e1d1b;
+  --muted: rgba(30, 29, 27, 0.72);
+  --tile: rgba(255, 255, 255, 0.7);
+  --tile-line: rgba(0, 0, 0, 0.08);
+  --hover: rgba(255, 255, 255, 0.42);
+}
+
+body.walled .tile .label,
+body.walled h2,
+body.walled #hint {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+body.walled.wall-light .tile .label,
+body.walled.wall-light h2,
+body.walled.wall-light #hint {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
+}
+
+body.walled .tile .icon {
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+
+#wall-button {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 3;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--hover);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+
+#wall-button:hover {
+  color: var(--text);
+}
+
+#wall-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+body.walled #wall-button {
+  background: rgba(0, 0, 0, 0.34);
+  color: #fff;
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+
+#wall-picker {
+  position: fixed;
+  right: 18px;
+  bottom: 64px;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(4, 104px);
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(28, 27, 26, 0.86);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.16);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+
+.wp {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: center;
+  cursor: default;
+}
+
+.wp .pic {
+  display: block;
+  width: 104px;
+  height: 59px;
+  border-radius: 9px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #3a3835, #24221f);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+.wp .pic img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wp:hover .pic {
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.5);
+}
+
+.wp.on .pic {
+  box-shadow: 0 0 0 2.5px #ff8a3d;
+}
+
+.wp.on {
+  color: #fff;
+  font-weight: 600;
+}
+
+.wp .name {
+  display: block;
+  margin-top: 6px;
+}
+
+/* ---- Fehlerseite ---------------------------------------------------------- */
+
+main.error {
+  max-width: 560px;
+  padding-top: 16vh;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+main.error .big {
+  width: 64px;
+  height: 64px;
+  color: var(--muted);
+  display: block;
+}
+
+main.error h1 {
+  margin: 20px 0 8px;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+main.error p {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 26px 0 0;
+}
+
+.btns button {
+  font: inherit;
+  font-weight: 500;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--hover);
+  color: var(--text);
+  cursor: default;
+}
+
+.btns button.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btns button:hover {
+  filter: brightness(1.06);
+}
+
+/* Der leise dritte Weg unter den Knöpfen („immer erlauben“). */
+main.error button.quiet {
+  font: inherit;
+  font-size: 12.5px;
+  margin-top: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: default;
+}
+
+main.error button.quiet:hover {
+  color: var(--text);
+}
+
+#details {
+  margin-top: 30px !important;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+/* ---- Quelltext einer Seite ------------------------------------------------ */
+
+body.source {
+  margin: 0;
+  padding: 0;
+}
+
+#src-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#src-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#src-head label {
+  flex: none;
+}
+
+#src {
+  margin: 0;
+  padding: 10px 16px 30px 64px;
+  font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre;
+  -webkit-user-select: text;
+  user-select: text;
+  tab-size: 4;
+}
+
+#src li::marker {
+  color: var(--muted);
+}
+
+#src li {
+  padding-left: 10px;
+  min-height: 1.5em;
+}
+
+body.source.wrap #src {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#src-note {
+  margin: 0;
+  padding: 0 16px 30px 64px;
+  color: var(--muted);
+  font-size: 12px;
+}

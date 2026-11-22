@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title></title>
+<link rel="stylesheet" href="pages.css">
+</head>
+<body>
+<!--ICONS-->
+<div id="wall" hidden>
+  <img id="wall-still" alt="">
+  <video id="wall-video" muted loop playsinline preload="auto" disablepictureinpicture></video>
+  <div id="wall-shade"></div>
+</div>
+<main>
+  <img id="logo" src="appicon.png" alt="">
+  <section id="private" hidden>
+    <svg><use href="#i-private"/></svg>
+    <h1></h1>
+    <p></p>
+  </section>
+  <section id="stealth" hidden>
+    <svg class="mark"><use href="#i-stealth"/></svg>
+    <h1></h1>
+    <p class="lead"></p>
+    <ul id="stealth-list"></ul>
+    <div id="stealth-how" hidden>
+      <p></p>
+      <code></code>
+    </div>
+    <p class="note"></p>
+  </section>
+  <section id="bookmarks" hidden>
+    <h2></h2>
+    <div class="tiles"></div>
+  </section>
+  <section id="top" hidden>
+    <h2></h2>
+    <div class="tiles"></div>
+  </section>
+  <p id="hint"></p>
+</main>
+<div id="desk-folder" hidden>
+  <div class="win">
+    <h3></h3>
+    <div class="tiles"></div>
+    <p class="out"></p>
+  </div>
+</div>
+<button id="wall-button" type="button" hidden><svg><use href="#i-image"/></svg></button>
+<div id="wall-picker" hidden></div>
+<!--DATA-->
+<script src="newtab.js"></script>
+</body>
+</html>

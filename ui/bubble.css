@@ -1,0 +1,157 @@
+/* Sprechblase des Passwort-Tresors. Farben und Grundbausteine kommen aus
+   chrome.css. Die Blase ist eine eigene kleine Ansicht über der Seite; der Rand
+   von 10 Punkten ringsum gehört dem Schatten. */
+
+#card {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--pop);
+  box-shadow: 0 3px 9px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  #card {
+    box-shadow: 0 3px 9px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.18);
+  }
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 6px 8px;
+}
+
+.head .ic {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.head .ibtn .ic {
+  color: var(--icon);
+}
+
+.head .t {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.acct {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+}
+
+.acct:hover {
+  background: var(--hover);
+}
+
+.acct:active {
+  background: var(--press);
+}
+
+.acct .ic {
+  width: 20px;
+  height: 20px;
+  color: var(--icon);
+}
+
+.acct .txt {
+  flex: 1;
+  min-width: 0;
+}
+
+.acct .t,
+.acct .s {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.acct .s {
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.acct .s.code {
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.note {
+  padding: 6px 8px 8px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.note.warn {
+  color: var(--warn);
+}
+
+.sep {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--line);
+}
+
+.link {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  text-align: left;
+}
+
+.link:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* ---- Frage „sichern?“ --------------------------------------------------- */
+
+.who {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--hover);
+}
+
+.who .t,
+.who .s {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.who .s {
+  margin-top: 3px;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+}
+
+.btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 8px 4px;
+}
