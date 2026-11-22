@@ -305,7 +305,17 @@ impl App {
         }
         let tab = &mut win.tabs[index];
         let flag = |key: &str| data.get(key).and_then(Value::as_bool).unwrap_or(false);
-        match data.get("t").and_then(Value::as_str).unwrap_or("") {
+        let kind = data.get("t").and_then(Value::as_str).unwrap_or("");
+        // Wer auf einer Website ein Passwort eingibt, ist dort erkennbar – das
+        // zeigt die Tarn-Ampel des Stealth-Fensters (gemerkt wird nur die Website).
+        if matches!(kind, "typed" | "submit") && text_of(&data, "p", MAX_PASSWORD).is_some_and(|p| !p.is_empty()) {
+            if let Some(domain) = crate::sites::domain_of(&tab.url) {
+                if tab.signed_in.len() < 200 && tab.signed_in.insert(domain) {
+                    win.dirty = true;
+                }
+            }
+        }
+        match kind {
             "forms" => {
                 let (form, signup, user_step) = (flag("login"), flag("signup"), flag("user"));
                 if (tab.login.form, tab.login.signup, tab.login.user_step) != (form, signup, user_step) {

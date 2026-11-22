@@ -172,6 +172,14 @@ pub struct Tab {
     /// Wie oft kurz hintereinander Tracking-Anhängsel entfernt wurden – hängt ein
     /// Server sie hartnäckig wieder an, wird die Adresse einmal gelassen, wie sie ist.
     pub rewrites: (u8, Instant),
+    /// Stealth-Fenster: was die Seite über das Gerät abgefragt hat, je Rahmen
+    /// (Rechnername; leer steht für die Seite selbst) und Art. Siehe `ui/watch.js`.
+    pub asked: HashMap<String, std::collections::BTreeMap<&'static str, u32>>,
+    /// Bremse für diese Meldungen: Beginn der laufenden Sekunde und Zahl darin.
+    pub asked_rate: (Instant, u32),
+    /// Websites, bei denen in diesem Tab ein Passwort eingegeben wurde – dort
+    /// weiß die Website, wer man ist, gleich wie gut alles andere getarnt ist.
+    pub signed_in: HashSet<String>,
 }
 
 impl Tab {
@@ -198,6 +206,9 @@ impl Tab {
             readable: false,
             mobile: false,
             rewrites: (0, Instant::now()),
+            asked: HashMap::new(),
+            asked_rate: (Instant::now(), 0),
+            signed_in: HashSet::new(),
         }
     }
 
@@ -274,6 +285,8 @@ pub struct BrowserWindow {
     pub overlay: bool,
     /// Beim Start: Die Seiten bleiben unsichtbar, bis das Ladebild zu sehen ist.
     pub hold_content: bool,
+    /// Die Tarn-Ampel hat Neues zu zeigen (Abfragen der Seite).
+    pub ampel_pending: bool,
     /// Welche Zahl gesperrter Abrufe das Schild gerade zeigt.
     pub blocked_shown: u32,
     /// Aktuelle Höhe des Rahmens – mit Suchleiste oder Hinweis höher als normal.
@@ -985,7 +998,7 @@ impl App {
                 let Some(tab) = self.windows.get(&window).and_then(|w| w.tabs.get(index)).map(|t| t.id) else {
                     return;
                 };
-                self.handle_page(window, tab, PageEvent::Ping { origin: ping.origin, body: ping.body });
+                self.handle_page(window, tab, PageEvent::Ping { origin: ping.origin, body: ping.body, main: ping.main_frame });
             }
             UserEvent::Thumb { window, tab, bytes } => {
                 // Nur für Tabs, die es noch gibt; alte Bilder geschlossener Tabs fallen weg.
@@ -1044,7 +1057,7 @@ impl App {
             .values()
             .any(|w| w.active_tab().is_some_and(|t| t.loading));
         // Der Zähler der gesperrten Abrufe läuft auch nach dem Laden weiter.
-        if loading || crate::blocker::blocked_pending() {
+        if loading || crate::blocker::blocked_pending() || self.windows.values().any(|w| w.ampel_pending) {
             return ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(90));
         }
         if let Some(since) = self.session_dirty {
@@ -1170,6 +1183,16 @@ impl App {
                     win.blocked_shown = count;
                     win.send(json!({ "t": "blocked", "n": count }));
                 }
+            }
+        }
+        // Tarn-Ampel: neue Abfragen der Seite nachführen.
+        let pending: Vec<WindowId> =
+            self.windows.iter().filter(|(_, w)| w.ampel_pending && w.ui_ready).map(|(id, _)| *id).collect();
+        for id in pending {
+            let ampel = self.ampel(id);
+            if let Some(win) = self.windows.get_mut(&id) {
+                win.ampel_pending = false;
+                win.send(json!({ "t": "ampel", "ampel": ampel }));
             }
         }
         // Filterlisten: gelegentlich nachsehen, ob es Zeit zum Auffrischen ist –
@@ -1413,6 +1436,7 @@ impl App {
                 // Unter dem Ladebild bleibt die Seite unsichtbar, bis es wirklich
                 // steht – sonst blitzte sie davor kurz auf.
                 hold_content: splash,
+                ampel_pending: false,
                 blocked_shown: 0,
                 overlay: splash,
                 chrome_height: CHROME_HEIGHT,
@@ -1856,6 +1880,62 @@ impl App {
         }
     }
 
+    /// Die Tarn-Ampel für den aktiven Tab eines Stealth-Fensters: wie gut man
+    /// auf dieser Seite getarnt ist – und was die Seite abgefragt hat. `null`
+    /// in anderen Fenstern und auf Zunders eigenen Seiten.
+    ///
+    /// Rot: Die Website weiß, wer man ist (Passwort eingegeben), oder die
+    /// Verbindung ist unverschlüsselt. Gelb: Die IP-Adresse ist sichtbar (kein
+    /// Tor) oder der Blocker ist für die Website aus. Sonst grün.
+    pub fn ampel(&self, id: WindowId) -> Value {
+        let Some(win) = self.windows.get(&id) else {
+            return Value::Null;
+        };
+        let Some(tab) = win.active_tab() else {
+            return Value::Null;
+        };
+        let bar = omnibox::bar_url(tab.shown_url());
+        let secure = bar.starts_with("https://");
+        if !win.stealth || !(secure || bar.starts_with("http://")) {
+            return Value::Null;
+        }
+        let site = crate::sites::domain_of(&bar);
+        let blocker = !crate::blocker::site_off(&bar);
+        let signed_in = site.as_ref().is_some_and(|site| tab.signed_in.contains(site));
+        let level = if !secure || signed_in {
+            0
+        } else if !win.tor || !blocker {
+            1
+        } else {
+            2
+        };
+        let asked: Vec<Value> = tab
+            .asked
+            .get("")
+            .map(|kinds| kinds.iter().map(|(kind, count)| json!({ "k": kind, "n": count })).collect())
+            .unwrap_or_default();
+        let mut embedded: Vec<(&String, Vec<&'static str>)> = tab
+            .asked
+            .iter()
+            .filter(|(host, kinds)| !host.is_empty() && !kinds.is_empty())
+            .map(|(host, kinds)| (host, kinds.keys().copied().collect()))
+            .collect();
+        embedded.sort();
+        let embedded: Vec<Value> =
+            embedded.into_iter().take(12).map(|(host, kinds)| json!({ "host": host, "kinds": kinds })).collect();
+        json!({
+            "level": level,
+            "tor": win.tor,
+            "secure": secure,
+            "blocker": blocker,
+            "signedIn": signed_in,
+            "site": site,
+            "blocked": tab.webview.as_ref().map(|webview| crate::blocker::blocked(native::key(webview))).unwrap_or(0),
+            "asked": asked,
+            "embedded": embedded,
+        })
+    }
+
     /// Sagt allen Fenstern, wie es um die Filterlisten steht (für die Einstellungen).
     pub fn send_filter_info(&mut self) {
         let info = self.blocker.info();
@@ -2163,8 +2243,9 @@ impl App {
             "reader": active.reader,
             "canRead": active.readable || active.reader,
             "mobile": active.mobile,
+            "ampel": self.ampel(id),
             "shield": {
-                "on": self.settings.blocker,
+                "on": self.settings.blocker || win.stealth,
                 "site": Some(&bar)
                     .filter(|bar| bar.starts_with("http://") || bar.starts_with("https://"))
                     .and_then(|bar| crate::sites::domain_of(bar)),

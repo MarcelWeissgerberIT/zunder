@@ -307,6 +307,7 @@ body.stealth {
   --muted: #8fa89a;
   --icon: #bcd3c5;
   --accent: #5fd39a;
+  --pop: #16201b;
 }
 
 #private-badge {
@@ -1318,6 +1319,231 @@ body.sheet #scrim {
 #reader.on,
 #mobile.on {
   color: var(--accent);
+}
+
+/* ---- Tarn-Ampel (Stealth-Fenster) ------------------------------------------ */
+
+#ampel {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  margin-right: 2px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.42);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.14), inset 0 1px 2px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+#ampel[hidden] {
+  display: none;
+}
+
+#ampel:hover {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+#ampel i,
+.amh .lights i {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.13);
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.5);
+  transition: background 0.35s, box-shadow 0.35s;
+}
+
+/* Das leuchtende Licht: heller Kern, weicher Schein, ruhiges Atmen. */
+#ampel.lvl0 i.r,
+.amh.lvl0 .lights i.r {
+  background: radial-gradient(circle at 35% 30%, #ffc2bb, #ff453a 55%, #c41f17);
+  box-shadow: 0 0 6px 1px rgba(255, 69, 58, 0.75), 0 0 14px 3px rgba(255, 69, 58, 0.3);
+  animation: ampel-glow 2.6s ease-in-out infinite;
+}
+
+#ampel.lvl1 i.y,
+.amh.lvl1 .lights i.y {
+  background: radial-gradient(circle at 35% 30%, #fff0b8, #ffd60a 55%, #c79600);
+  box-shadow: 0 0 6px 1px rgba(255, 214, 10, 0.7), 0 0 14px 3px rgba(255, 214, 10, 0.28);
+  animation: ampel-glow 2.6s ease-in-out infinite;
+}
+
+#ampel.lvl2 i.g,
+.amh.lvl2 .lights i.g {
+  background: radial-gradient(circle at 35% 30%, #c9ffdc, #32d74b 55%, #159b2d);
+  box-shadow: 0 0 6px 1px rgba(50, 215, 75, 0.75), 0 0 14px 3px rgba(50, 215, 75, 0.3);
+  animation: ampel-glow 2.6s ease-in-out infinite;
+}
+
+@keyframes ampel-glow {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.28);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #ampel i,
+  .amh .lights i {
+    animation: none !important;
+  }
+}
+
+#popup.ampelbox {
+  width: 360px;
+  box-sizing: border-box;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.amh {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 11px 10px 12px;
+}
+
+.amh .lights {
+  flex: none;
+  display: grid;
+  gap: 5px;
+  padding: 7px 6px;
+  border-radius: 11px;
+  background: #0d0f0e;
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.16), 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.amh .lights i {
+  width: 13px;
+  height: 13px;
+}
+
+.amh .t {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.amh.lvl0 .t {
+  color: #ff6b61;
+}
+
+.amh.lvl1 .t {
+  color: #e9c20a;
+}
+
+.amh.lvl2 .t {
+  color: #32d74b;
+}
+
+.amh .h {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.amf {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+.amf .dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+}
+
+.amf .dot.lvl0 {
+  background: #ff453a;
+}
+
+.amf .dot.lvl1 {
+  background: #ffd60a;
+}
+
+.amf .dot.lvl2 {
+  background: #32d74b;
+}
+
+.amf .l {
+  flex: none;
+  font-weight: 600;
+}
+
+.amf .v {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  color: var(--muted);
+}
+
+.amsub {
+  margin: 10px 4px 2px;
+  padding: 9px 6px 3px;
+  border-top: 1px solid var(--line, rgba(128, 128, 128, 0.25));
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ama {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+}
+
+.ama .txt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ama .l {
+  display: block;
+}
+
+.ama .n {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ama .c {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.amnone,
+.amnote {
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.amnote {
+  padding: 10px 10px 6px;
+  font-size: 11.5px;
 }
 
 /* Schild des Werbeblockers: Zahl der gesperrten Abrufe; durchgestrichen, wenn

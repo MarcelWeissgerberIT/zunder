@@ -1,7 +1,7 @@
 //! Reaktion auf alles, was in einem Tab passiert: Laden, Titel, Icons,
 //! Pop-ups, Downloads, Fehler.
 
-use serde_json::json;
+use serde_json::{json, Value};
 use tao::window::WindowId;
 
 use crate::app::{ActiveDownload, App, NoticeAction, Tab, TabId};
@@ -105,7 +105,10 @@ impl App {
             }
             PageEvent::Committed(url) => self.page_committed(window, index, url),
             PageEvent::Finished(url) => self.page_finished(window, index, url),
-            PageEvent::Ping { origin, body } => self.page_ping(window, index, &origin, &body),
+            PageEvent::Ping { origin, body, main } => match body.strip_prefix("q:") {
+                Some(counts) => self.page_asked(window, index, &origin, main, counts),
+                None => self.page_ping(window, index, &origin, &body),
+            },
             PageEvent::OpenInNewTab(url) => {
                 if let Some(url) = omnibox::as_url(&url) {
                     self.new_tab(window, Some(url), true, Some(tab_id));
@@ -250,6 +253,8 @@ impl App {
         }
         tab.url = url;
         tab.pending = None;
+        // Eine neue Seite: Was die alte abgefragt hat, zählt nicht mehr.
+        tab.asked.clear();
         // Was als Nächstes lädt, zeigt die Adressleiste nur, wenn der Browser
         // selbst wieder dorthin schickt.
         tab.pending_shown = false;
@@ -346,6 +351,61 @@ impl App {
 
     /// Nachricht des mitlaufenden Skripts. Der Inhalt kommt aus der Seite und
     /// wird nur als Hinweis gewertet; geprüft wird alles gegen WebKit selbst.
+    /// Stealth-Fenster: Der Beobachter in der Seite (`ui/watch.js`) meldet,
+    /// was sie bisher über das Gerät abgefragt hat. Das ist Auskunft der Seite
+    /// über sich selbst und löst nichts aus – es landet nur in der Tarn-Ampel.
+    fn page_asked(&mut self, window: WindowId, index: usize, origin: &str, main: bool, counts: &str) {
+        /// Die Arten, die der Beobachter kennt – etwas anderes wird nicht angenommen.
+        const KINDS: &[&str] = &[
+            "screen", "canvas", "webgl", "device", "agent", "language", "timezone", "fonts", "storage",
+            "cookie_write", "cookie_read", "referrer", "location", "media", "clipboard", "notify", "permissions",
+            "beacon",
+        ];
+        let Some(win) = self.windows.get_mut(&window) else {
+            return;
+        };
+        if !win.stealth || !is_web(origin) {
+            return;
+        }
+        let Some(tab) = win.tabs.get_mut(index) else {
+            return;
+        };
+        // Keine Seite hält den Browser mit Meldungen auf Trab.
+        if tab.asked_rate.0.elapsed() >= std::time::Duration::from_secs(1) {
+            tab.asked_rate = (std::time::Instant::now(), 0);
+        }
+        tab.asked_rate.1 += 1;
+        if tab.asked_rate.1 > 20 {
+            return;
+        }
+        // Die Seite selbst – oder ein eingebetteter Rahmen (dann unter seinem Namen).
+        let frame = match main {
+            true if host_of(origin) == host_of(&tab.url) => String::new(),
+            true => return,
+            false => host_of(origin),
+        };
+        if !main && frame.is_empty() {
+            return;
+        }
+        if !tab.asked.contains_key(&frame) && tab.asked.len() >= 24 {
+            return;
+        }
+        let Ok(Value::Object(reported)) = serde_json::from_str::<Value>(counts) else {
+            return;
+        };
+        let entry = tab.asked.entry(frame).or_default();
+        let mut changed = false;
+        for kind in KINDS {
+            if let Some(count) = reported.get(*kind).and_then(Value::as_u64) {
+                let count = count.min(9999) as u32;
+                changed |= entry.insert(kind, count) != Some(count);
+            }
+        }
+        if changed && win.active == index {
+            win.ampel_pending = true;
+        }
+    }
+
     fn page_ping(&mut self, window: WindowId, index: usize, origin: &str, body: &str) {
         let Some(win) = self.windows.get_mut(&window) else {
             return;

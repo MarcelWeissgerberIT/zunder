@@ -39,7 +39,7 @@ pub enum PageEvent {
     /// Nachricht des mitlaufenden Skripts. Kommt aus der Seite und ist damit
     /// grundsätzlich nicht vertrauenswürdig. `origin` stammt dagegen von WebKit.
     /// Angenommen wird sie in `native::bridge_received` – nicht über wry.
-    Ping { origin: String, body: String },
+    Ping { origin: String, body: String, main: bool },
     /// Ein Pop-up wurde erzeugt und wartet in `Shared::popups`.
     Popup,
     OpenInNewTab(String),
@@ -334,7 +334,7 @@ pub fn build_content(
             // der von WebKit gelieferten Konfiguration entstehen.
             let id = popup_shared.next_id();
             let config = features.opener.target_configuration.clone();
-            native::own_controller(&config);
+            native::own_controller(&config, popup_shared.stealth);
             match build_content(&popup_shared, id, rect(0.0, 0.0, 800.0, 600.0), None, Some(config)) {
                 Ok(webview) => {
                     // Die Schutzlisten sofort – der erste Abruf des neuen Tabs läuft gleich los.

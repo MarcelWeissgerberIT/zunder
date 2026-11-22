@@ -142,8 +142,9 @@ Wenige Schalter, die wirklich etwas bewirken (Einstellungen → Sicherheit):
   statt still unverschlüsselt zu laden. Die Zustimmung gilt je Rechner, bis
   Zunder beendet wird. Geräte im eigenen Netz (localhost, 192.168.x.x,
   `.local` …) sind ausgenommen.
-- **Werbung und Tracker blockieren** (an): sperrt rund 180 bekannte Dienste,
-  sobald sie von fremden Seiten eingebunden werden.
+- **Werbung und Tracker blockieren** (an): sperrt Werbung, Tracker und
+  ungefragte Werbefenster nach den Filterlisten, die auch die bekannten
+  Werbeblocker nutzen – siehe [Werbeblocker](#werbeblocker).
 - **Tracking-Anhängsel entfernen** (an): `utm_…`, `fbclid`, `gclid` und rund
   30 weitere Kennungen fliegen aus jeder Adresse, bevor sie geladen wird.
 - **Vor täuschend ähnlichen Adressen warnen** (an): Wer zum ersten Mal auf
@@ -228,6 +229,98 @@ Adressen kennt nur die eigenen Seiten, keine Liste bekannter Betrugsseiten.
 Und alles, was WebKit selbst betrifft (Lücken in der Darstellung von Seiten),
 schließt Apple mit den Updates von macOS – Zunder kann dort nur die
 Angriffsfläche verkleinern (Härtung).
+
+## Werbeblocker
+
+![Filterlisten in den Einstellungen](docs/zunder-filterlisten.png)
+
+Der Blocker ist von Haus aus an und arbeitet in zwei Schichten:
+
+1. Eine **eingebaute Liste** der rund 180 bekanntesten Werbe- und
+   Tracking-Dienste. Sie steckt im Programm und gilt vom ersten Abruf an.
+2. Die großen Filterlisten **EasyList, EasyList Germany und EasyPrivacy** –
+   zusammen rund 140.000 Regeln. Sie liegen der App bei (unverändert, siehe
+   `assets/filters/`), werden alle vier Tage direkt von easylist.to
+   aufgefrischt und von Zunder in das Regelformat von WebKit übersetzt
+   (`src/filters.rs`). WebKit prüft die Abrufe dann selbst: Der Blocker liest
+   keine Seite mit und kostet beim Surfen keine Zeit. Übersetzt wird nur, wenn
+   sich die Listen ändern (rund sechs Sekunden im Hintergrund); beim Start
+   stehen die Listen in weniger als einer Sekunde.
+
+Gesperrt werden Abrufe (Skripte, Bilder, eingebettete Rahmen, Zählpixel …),
+Werbefenster und einzelne Seiten, die sich ungefragt öffnen; ausgeblendet
+werden die leeren Flächen, die Werbung sonst hinterlässt. Was sich in WebKits
+Regelsprache nicht genau ausdrücken lässt (Skripte, Umleitungen, erweiterte
+Auswahl-Sprachen), fällt weg – und zwar immer zur vorsichtigen Seite: Eine
+Sperre wird höchstens enger, eine Ausnahme höchstens weiter als in der Liste.
+
+- Das **Schild in der Adresszeile** zeigt, wie viele Abrufe auf der Seite
+  gesperrt wurden. Ein Klick darauf schaltet den Blocker **nur für diese
+  Website** ab oder an – für Seiten, die mit ihm nicht zurechtkommen.
+- Manche Websites sperren Besucher mit Werbeblocker aus. Zunder umgeht solche
+  Sperren nicht. Es sagt aber, woran es liegt, und bietet mit einem Klick an,
+  den Blocker für genau diese Website abzuschalten.
+- **Grenzen:** Werbung, die eine Website selbst und untrennbar vom Inhalt
+  ausliefert (etwa Werbepausen in Videos), fängt ein Blocker dieser Bauart
+  nicht ab. Dazu bräuchte es eingeschleuste Skripte – darauf verzichtet Zunder.
+
+Die Listen stammen von den EasyList-Autoren (<https://easylist.to/>) und stehen
+unter GPL v3 oder CC BY-SA 3.0; Näheres in `assets/filters/README.md`.
+
+## Stealth-Fenster (⌥⌘N)
+
+![Startseite eines Stealth-Fensters über Tor](docs/zunder-stealth.png)
+
+So wenig Spuren wie möglich – auf diesem Mac und im Netz. Ein Stealth-Fenster
+ist ein privates Fenster mit zusätzlichen Riegeln:
+
+- **Nichts bleibt auf dem Mac:** kein Verlauf, keine Cookies, kein
+  Zwischenspeicher. Nur Downloads und ausdrücklich gesetzte Lesezeichen bleiben.
+- **Jeder Tab ist eine Insel:** Jeder Tab hat seinen eigenen, flüchtigen
+  Datenspeicher. Was eine Website in einem Tab speichert, sieht kein anderer –
+  Websites erkennen niemanden von Tab zu Tab wieder. (Tabs, die eine Seite
+  selbst öffnet, teilen sich die Insel ihrer Herkunft, sonst funktionierten
+  Anmelde-Fenster nicht.)
+- **Die Schutzschalter gelten immer:** Blocker, nur verschlüsselt, ohne
+  Tracking-Anhängsel, Schutz des eigenen Netzes – gleich, was sonst
+  eingestellt ist.
+- **Der Fingerabdruck wird verwischt:** WebKits Lockdown-Modus (kein JIT,
+  WebAssembly, WebGL), kein WebRTC (es spräche am Tunnel vorbei), und WebKits
+  eigener Schutz gegen Fingerabdrücke: Was Seiten von einer Zeichenfläche
+  zurücklesen, ist verrauscht – in jedem Tab anders –, und als Bildschirmgröße
+  sehen sie die Größe des Fensters.
+- **Über Tor, wenn Tor läuft:** Findet Zunder auf dem Mac einen Tor-Zugang
+  (Port 9050 des Tor-Dienstes oder 9150 des Tor Browsers), geht der gesamte
+  Verkehr des Fensters dort hindurch – jeder Tab über einen eigenen Weg, Namen
+  werden erst im Tor-Netz aufgelöst. Fällt Tor aus, lädt nichts mehr: Am
+  Tunnel vorbei geht nichts. Einrichten: `brew install tor && brew services
+  start tor`, danach ein neues Stealth-Fenster öffnen.
+
+Was es **nicht** kann, sagt die Startseite des Fensters offen: Ohne Tor sehen
+Websites und Netzbetreiber weiterhin die IP-Adresse. Und auch mit Tor ist
+Zunder nicht der Tor Browser – dessen Besucher sehen für Websites alle gleich
+aus, die von Zunder nicht. Wer sich irgendwo anmeldet, ist dort erkennbar.
+
+### Tarn-Ampel
+
+![Die Tarn-Ampel mit den Abfragen einer Seite](docs/zunder-tarn-ampel.png)
+
+In der Adresszeile eines Stealth-Fensters zeigt eine Ampel, wie gut man auf
+der Seite getarnt ist, die gerade offen ist:
+
+- **Grün:** über Tor, verschlüsselt, Blocker an, kein Passwort eingegeben.
+- **Gelb:** Die Website sieht die IP-Adresse (Tor läuft nicht) – oder der
+  Blocker ist für diese Website abgeschaltet.
+- **Rot:** Die Verbindung ist unverschlüsselt – oder man hat auf dieser
+  Website ein Passwort eingegeben und ist ihr damit bekannt.
+
+Ein Klick zeigt die Gründe und dazu, **was die Seite selbst per JavaScript
+abgefragt hat**: Bildschirmgröße, Zeichenfläche (typisch für Fingerabdrücke),
+Grafikkarte, Geräte-Eigenschaften, Browser-Kennung, Sprache, Zeitzone,
+Schriften, Cookies, Speicher, Standort, Kamera und Mikrofon, Zwischenablage –
+jeweils mit Anzahl, auch für eingebettete Rahmen. Gezählt wird, was über die
+üblichen Wege läuft (`ui/watch.js`); das ist eine Auskunft, kein Beweis: Eine
+Seite, die es darauf anlegt, kann daran vorbei fragen.
 
 ## Passwörter
 
@@ -319,8 +412,13 @@ Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
   mitunter etwas oder es bleibt Beiwerk stehen.
 - Mitteilungen von Webseiten und Standortabfrage (bietet WebKit eingebetteten
   Browsern nicht bzw. nur mit Zusatzaufwand an).
-- Der Blocker arbeitet mit einer festen Liste, nicht mit den großen
-  Filterlisten, und blendet keine leeren Werbeflächen aus.
+- Der Blocker setzt die Filterlisten um, schleust aber keine Skripte in
+  Seiten ein. Werbepausen in Videos und Websites, die Besucher mit Blocker
+  aussperren, bleiben deshalb, wie sie sind.
+- Stealth-Fenster: Tor bringt Zunder nicht selbst mit – es nutzt einen
+  Tor-Zugang, der auf dem Mac läuft. Ohne ihn bleibt die IP-Adresse sichtbar.
+- Der Assistent kennt Apples Modell auf dem Gerät, Ollama und Claude (mit
+  API-Schlüssel). Andere Dienste und eine Anmeldung per OAuth gibt es nicht.
 - **Sperrliste für Betrugsseiten**: WebKits eigener Schalter dafür ist an, ließ
   sich mit der offiziellen Testseite in Zunder aber nicht auslösen. Zugesagt
   wird dieser Schutz deshalb nicht. Zunder warnt selbst vor Adressen, die den
@@ -387,6 +485,9 @@ der Assistent bietet dann Ollama und Claude an.
 | `src/native.rs` | Direkter Draht zu AppKit/WebKit für alles, was wry nicht anbietet |
 | `src/omnibox.rs` | Adressleiste: Adresse oder Suche, Suchmaschinen, Vorschläge |
 | `src/shield.rs` | Schutz beim Navigieren: nur verschlüsselt, Tracking-Anhängsel |
+| `src/blocker.rs` | Werbeblocker und Schutz des eigenen Netzes: Regellisten für WebKit, Auffrischen, Schalter je Website |
+| `src/filters.rs` | Übersetzer für Filterlisten (EasyList-Schreibweise → WebKits Regelformat) |
+| `src/stealth.rs` | Stealth-Fenster: Tor-Zugang auf dem Mac finden |
 | `src/vault.rs` | Passwort-Tresor: Verschlüsselung, Schlüssel, Zuordnung zu Websites, CSV |
 | `src/logins.rs` | Passwörter im Browser: Sichern, Ausfüllen, Sprechblase, Verwaltung |
 | `src/reader.rs` | Lesemodus |
@@ -395,7 +496,6 @@ der Assistent bietet dann Ollama und Claude an.
 | `src/assistant.rs` | Seitenleiste des Assistenten: Seitentext holen, Modellwahl, Schlüssel |
 | `src/wallpapers.rs` | Liefert die Live-Hintergründe an die Startseite |
 | `src/store.rs` | Verlauf, Lesezeichen, Downloads, Einstellungen (SQLite) |
-| `src/blocker.rs` | Werbe- und Tracker-Blocker über WebKit-Regellisten |
 | `src/menu.rs` | Menüleiste |
 | `src/assets.rs` | Liefert Oberfläche und interne Seiten über `zunder://` aus |
 | `src/i18n.rs` | Texte, deutsch und englisch |
@@ -501,7 +601,7 @@ einem Update von wry zuerst zu prüfen ist; in einer Probe-App zeigt der Befehl
 ## Icons und Hintergründe
 
 Alle Icons wurden über Higgsfield generiert (Modell `gpt_image_2_6`): das
-App-Icon als Bild, die 49 Icons der Oberfläche als SVG. Die unveränderten
+App-Icon als Bild, die 50 Icons der Oberfläche als SVG. Die unveränderten
 Ergebnisse liegen in `assets/higgsfield-raw/`, die Auftragsnummern in
 `assets/icon-jobs.json`.
 
@@ -580,7 +680,9 @@ In der Probe-App gilt:
 Datenhaltung, die Sperrliste, den Schutz beim Navigieren, das Zerlegen und
 Verpacken von Seitentext, die Form der Anfragen an die Modelle, das Ausliefern
 der Hintergründe, den Passwort-Tresor (Zuordnung zu Websites, Verschlüsselung,
-Vorschläge, CSV) und das Einlesen von Lesezeichen (55 Tests).
+Vorschläge, CSV), das Einlesen von Lesezeichen, den Übersetzer für
+Filterlisten – auch mit den mitgelieferten Listen als Ganzes – und das Erkennen
+eines Tor-Zugangs (65 Tests).
 
 Der Name „Zunder“ ist ein Arbeitstitel. Er steht in `Cargo.toml`,
 `scripts/bundle.sh`, `src/menu.rs`, `src/i18n.rs` und im Schema `zunder://`.

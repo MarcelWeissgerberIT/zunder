@@ -530,6 +530,7 @@
   $('reader').addEventListener('click', () => command('reader'));
   $('mobile').addEventListener('click', () => command('mobile_view'));
   $('shield').addEventListener('click', () => (ui.menu === 'shield' ? closeMenu() : openShield()));
+  $('ampel').addEventListener('click', () => (ui.menu === 'ampel' ? closeMenu() : openAmpel()));
   $('key').addEventListener('click', () => {
     closeEverything();
     post({ c: 'pwKey' });
@@ -630,6 +631,7 @@
     key.classList.toggle('pending', !!logins.pending);
 
     $('mobile').hidden = !next.mobile;
+    renderAmpel(next.ampel);
     renderShield(next.shield);
     renderSplitBar(next);
     const reader = $('reader');
@@ -790,6 +792,115 @@
     syncOverlay();
   }
 
+  // Die Tarn-Ampel im Stealth-Fenster: wie gut man auf DIESER Seite getarnt
+  // ist – und was die Seite über das Gerät abgefragt hat.
+  const AMPEL_KINDS = ['screen', 'canvas', 'webgl', 'device', 'agent', 'language', 'timezone', 'fonts', 'cookie_write',
+    'cookie_read', 'storage', 'referrer', 'location', 'media', 'clipboard', 'notify', 'permissions', 'beacon'];
+
+  function renderAmpel(ampel) {
+    ui.ampel = ampel || null;
+    const button = $('ampel');
+    button.hidden = !ampel;
+    if (!ampel) {
+      if (ui.menu === 'ampel') closeMenu();
+      return;
+    }
+    button.className = 'lvl' + ampel.level;
+    button.title = S['am_tip_' + ampel.level];
+    if (ui.menu === 'ampel') fillAmpel();
+  }
+
+  function ampelReason(ampel) {
+    if (ampel.signedIn) return S.am_why_signed;
+    if (!ampel.secure) return S.am_why_http;
+    if (!ampel.tor) return S.am_why_ip;
+    if (!ampel.blocker) return S.am_why_blocker;
+    return S.am_why_ok;
+  }
+
+  function fillAmpel() {
+    const ampel = ui.ampel;
+    if (!ampel) return;
+    const box = $('popup');
+    const scroll = box.scrollTop;
+    box.textContent = '';
+    box.classList.add('ampelbox');
+
+    const head = el('div', 'amh lvl' + ampel.level);
+    const lights = el('div', 'lights');
+    for (const name of ['r', 'y', 'g']) lights.appendChild(el('i', name));
+    head.appendChild(lights);
+    const words = el('div', 'txt');
+    words.appendChild(el('div', 't', S['am_title_' + ampel.level]));
+    words.appendChild(el('div', 'h', ampelReason(ampel)));
+    head.appendChild(words);
+    box.appendChild(head);
+
+    // Woraus sich die Farbe ergibt.
+    const fact = (level, label, value) => {
+      const row = el('div', 'amf');
+      row.appendChild(el('i', 'dot lvl' + level));
+      row.appendChild(el('span', 'l', label));
+      row.appendChild(el('span', 'v', value));
+      box.appendChild(row);
+    };
+    fact(ampel.tor ? 2 : 1, S.am_f_ip, ampel.tor ? S.am_f_ip_on : S.am_f_ip_off);
+    fact(ampel.secure ? 2 : 0, S.am_f_conn, ampel.secure ? S.am_f_conn_on : S.am_f_conn_off);
+    fact(
+      ampel.blocker ? 2 : 1,
+      S.am_f_block,
+      !ampel.blocker ? S.am_f_block_off : ampel.blocked ? S.am_f_block_n.replace('{n}', ampel.blocked.toLocaleString()) : S.am_f_block_on
+    );
+    fact(2, S.am_f_island, S.am_f_island_on);
+    fact(2, S.am_f_print, S.am_f_print_on);
+    fact(ampel.signedIn ? 0 : 2, S.am_f_login, ampel.signedIn ? S.am_f_login_yes : S.am_f_login_no);
+
+    // Was die Seite selbst abgefragt hat.
+    box.appendChild(el('div', 'amsub', S.am_asked_head.replace('{site}', ampel.site || '')));
+    const asked = new Map((ampel.asked || []).map((entry) => [entry.k, entry.n]));
+    const kinds = AMPEL_KINDS.filter((kind) => asked.has(kind));
+    if (!kinds.length) box.appendChild(el('div', 'amnone', S.am_asked_none));
+    for (const kind of kinds) {
+      const row = el('div', 'ama');
+      const text = el('div', 'txt');
+      text.appendChild(el('span', 'l', S['am_k_' + kind] || kind));
+      const note = S['am_n_' + kind];
+      if (note) text.appendChild(el('span', 'n', note));
+      row.appendChild(text);
+      const count = asked.get(kind);
+      row.appendChild(el('span', 'c', count >= 9999 ? '9999+ ×' : count.toLocaleString() + ' ×'));
+      box.appendChild(row);
+    }
+    const embedded = ampel.embedded || [];
+    if (embedded.length) {
+      box.appendChild(el('div', 'amsub', S.am_embedded_head));
+      for (const frame of embedded) {
+        const row = el('div', 'ama');
+        const text = el('div', 'txt');
+        text.appendChild(el('span', 'l', frame.host));
+        text.appendChild(el('span', 'n', frame.kinds.map((kind) => S['am_k_' + kind] || kind).join(', ')));
+        row.appendChild(text);
+        box.appendChild(row);
+      }
+    }
+    box.appendChild(el('div', 'amnote', S.am_note));
+    box.scrollTop = scroll;
+  }
+
+  function openAmpel() {
+    fillAmpel();
+    const box = $('popup');
+    const place = $('ampel').getBoundingClientRect();
+    box.style.top = Math.round(place.bottom + 8) + 'px';
+    box.style.left = Math.max(8, Math.min(place.right - 360, window.innerWidth - 368)) + 'px';
+    box.style.right = 'auto';
+    box.hidden = false;
+    ui.menu = 'ampel';
+    closePanel();
+    closeTabSearch();
+    syncOverlay();
+  }
+
   // Das Schild in der Adresszeile: wie viel auf dieser Seite gesperrt wurde –
   // und der Schalter, falls eine Website mit dem Blocker nicht zurechtkommt.
   function renderShield(shield) {
@@ -908,6 +1019,7 @@
     if (!ui.menu) return;
     ui.menu = null;
     $('popup').hidden = true;
+    $('popup').classList.remove('ampelbox');
     syncOverlay();
   }
 
@@ -2125,6 +2237,13 @@
         break;
       case 'blocked':
         setBlocked(message.n);
+        if (ui.ampel) {
+          ui.ampel.blocked = message.n;
+          if (ui.menu === 'ampel') fillAmpel();
+        }
+        break;
+      case 'ampel':
+        renderAmpel(message.ampel);
         break;
       case 'filters':
         ui.filters = message.info;

@@ -528,6 +528,9 @@ pub fn content_config(
         }
         // Zunders eigenes Skript (Passwort-Tresor) samt seinem Nachrichtenkanal.
         attach_bridge(&config);
+        if stealth {
+            attach_watch(&config);
+        }
         config
     }
 }
@@ -1440,6 +1443,8 @@ pub fn install_hooks(existing: &WebView) {
 
 /// Zunders Skript in jeder Seite: erkennt Anmeldeformulare und füllt sie aus.
 const LOGINS_JS: &str = include_str!("../ui/logins.js");
+/// Beobachter für Stealth-Fenster: zählt, was Seiten über das Gerät abfragen.
+const WATCH_JS: &str = include_str!("../ui/watch.js");
 const BRIDGE_NAME: &str = "zunder";
 
 /// Nachricht von Zunders Skript in einer Seite.
@@ -1462,6 +1467,8 @@ pub struct PagePing {
     /// Adresse des Dokuments, das die Nachricht geschickt hat.
     pub origin: String,
     pub body: String,
+    /// Kam sie aus der Seite selbst – oder aus einem eingebetteten Rahmen?
+    pub main_frame: bool,
 }
 
 /// Kanal der Seiten-Welt. Ihn nimmt Zunder selbst entgegen (statt über wry):
@@ -1491,8 +1498,9 @@ extern "C-unwind" fn bridge_received(_this: Obj, _cmd: Sel, _controller: Obj, me
         let webview: Obj = msg_send![message, webView];
         let name: Obj = msg_send![message, name];
         if string_of(name) == PAGE_CHANNEL {
-            // Unterrahmen haben dem Browser nichts zu melden.
-            if !main_frame || body.len() > 4096 {
+            // Unterrahmen haben dem Browser nichts zu melden – außer der Zahl
+            // ihrer Abfragen für die Tarn-Ampel (`q:`), die nichts auslöst.
+            if body.len() > 4096 || (!main_frame && !body.starts_with("q:")) {
                 return;
             }
             let request: Obj = msg_send![frame, request];
@@ -1523,7 +1531,7 @@ extern "C-unwind" fn bridge_received(_this: Obj, _cmd: Sel, _controller: Obj, me
                     return;
                 }
             }
-            emit(UserEvent::Ping(PagePing { webview: webview as usize, origin, body }));
+            emit(UserEvent::Ping(PagePing { webview: webview as usize, origin, body, main_frame }));
             return;
         }
         let security: Obj = msg_send![frame, securityOrigin];
@@ -1582,12 +1590,28 @@ fn bridge_handler() -> Retained<AnyObject> {
 /// öffnenden Tabs – samt dessen Liste von Skripten und Sperrlisten (ein und
 /// dasselbe Objekt). Hier bekommt er seine eigene: Sonst gälte für beide Tabs
 /// immer dasselbe, auch wenn sie längst verschiedene Websites zeigen.
-pub fn own_controller(config: &WKWebViewConfiguration) {
+pub fn own_controller(config: &WKWebViewConfiguration, stealth: bool) {
     unsafe {
         let fresh: Retained<AnyObject> = msg_send![class!(WKUserContentController), new];
         let _: () = msg_send![config, setUserContentController: &*fresh];
     }
     attach_bridge(config);
+    if stealth {
+        attach_watch(config);
+    }
+}
+
+/// Stealth-Fenster: der Beobachter, der mitzählt, was Seiten abfragen – in der
+/// Welt der Seite und in jedem Rahmen, gleich zu Beginn des Dokuments.
+fn attach_watch(config: &WKWebViewConfiguration) {
+    unsafe {
+        let controller = config.userContentController();
+        let allocated: Allocated<AnyObject> = msg_send![class!(WKUserScript), alloc];
+        // WKUserScriptInjectionTimeAtDocumentStart = 0
+        let script: Retained<AnyObject> =
+            msg_send![allocated, initWithSource: &*ns(WATCH_JS), injectionTime: 0isize, forMainFrameOnly: false];
+        let _: () = msg_send![&*controller, addUserScript: &*script];
+    }
 }
 
 /// Hängt Zunders Skript und seinen Nachrichtenkanal an die Konfiguration
