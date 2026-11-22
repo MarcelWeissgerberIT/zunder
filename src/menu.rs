@@ -100,6 +100,8 @@ pub fn build() -> Menu {
         &item("zoom_reset", "m_zoom_reset", key(CMD, Code::Digit0)),
         &sep(),
         &item("reader", "m_reader", key(CMD | ALT, Code::KeyR)),
+        &item("translate_page", "m_translate", key(CMD | ALT, Code::KeyT)),
+        &item("site_check", "m_site_check", key(CMD | ALT, Code::KeyS)),
         &sep(),
         &item("assistant", "m_assistant", key(CMD, Code::KeyJ)),
         &item("assistant_summary", "m_assistant_summary", key(CMD | SHIFT, Code::KeyJ)),

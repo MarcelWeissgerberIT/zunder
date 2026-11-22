@@ -52,9 +52,44 @@ use crate::filters;
 pub const BASIS_PREFIX: &str = "zunder-basis";
 pub const FILTER_PREFIX: &str = "zunder-filter";
 
-/// So lange gilt ein Stand der Filterlisten, bis online nach einem neueren
-/// gesehen wird (die Listen selbst nennen vier Tage).
-const REFRESH_AFTER: Duration = Duration::from_secs(4 * 24 * 60 * 60);
+/// Kennung der Listen gemeldeter Betrugs- und Schadseiten.
+pub const GUARD_PREFIX: &str = "zunder-schutz";
+
+/// Ein Satz großer Listen: woher er kommt und wie er behandelt wird.
+struct Kind {
+    /// Kennung der übersetzten Listen (`<prefix>-<n>`).
+    prefix: &'static str,
+    sources: &'static [filters::Source],
+    /// Name der Vermerk-Datei im Profil.
+    state_file: &'static str,
+    /// Liegen die Listen der App bei – oder kommen sie nur aus dem Netz?
+    bundled: bool,
+    /// So lange gilt ein Stand, bis online nach einem neueren gesehen wird.
+    refresh_after: Duration,
+    /// Listen gemeldeter Betrugs- und Schadseiten (andere Lesart, siehe `filters`).
+    guard: bool,
+}
+
+/// Satz 0: Werbung und Tracker (die Listen nennen vier Tage). Satz 1:
+/// gemeldete Betrugs- und Schadseiten – die veralten schnell, also zweimal täglich.
+static KINDS: [Kind; 2] = [
+    Kind {
+        prefix: FILTER_PREFIX,
+        sources: filters::SOURCES,
+        state_file: "state.json",
+        bundled: true,
+        refresh_after: Duration::from_secs(4 * 24 * 60 * 60),
+        guard: false,
+    },
+    Kind {
+        prefix: GUARD_PREFIX,
+        sources: filters::GUARD_SOURCES,
+        state_file: "guard.json",
+        bundled: false,
+        refresh_after: Duration::from_secs(12 * 60 * 60),
+        guard: true,
+    },
+];
 
 /// Bekannte Werbe- und Tracking-Dienste. Gesperrt wird nur, wenn sie von einer
 /// FREMDEN Seite eingebunden werden – der direkte Besuch bleibt möglich.
@@ -169,7 +204,8 @@ const LOCAL_HOSTS: &[&str] = &[
 fn local_rules_json(allowed: &[String]) -> String {
     let host_patterns: Vec<String> = LOCAL_HOSTS
         .iter()
-        .map(|host| format!("{HOST_START}{host}[:/]"))
+        // Mit dem Punkt, der hinter jedem Rechnernamen stehen darf: `localhost.` ist `localhost`.
+        .map(|host| format!("{HOST_START}{host}\\.?[:/]"))
         .collect();
     // Wer darf: Seiten, die selbst im eigenen Netz liegen, Dateien, interne
     // Seiten – und die ausdrücklich erlaubten Websites.
@@ -179,7 +215,7 @@ fn local_rules_json(allowed: &[String]) -> String {
     for site in allowed {
         let plausible = !site.is_empty() && site.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
         if plausible {
-            exempt.push(format!("{HOST_START}([^/:]*\\.)?{}[:/]", site.replace('.', "\\.")));
+            exempt.push(format!("{HOST_START}([^/:]*\\.)?{}\\.?[:/]", site.replace('.', "\\.")));
         }
     }
     let rules: Vec<serde_json::Value> = host_patterns
@@ -200,7 +236,7 @@ fn rules_json() -> String {
         let escaped = domain.replace('.', "\\.");
         rules.push(serde_json::json!({
             "trigger": {
-                "url-filter": format!("^[^:]+://+([^:/]+\\.)?{escaped}[:/]"),
+                "url-filter": format!("^[^:]+://+([^:/]+\\.)?{escaped}\\.?[:/]"),
                 "load-type": ["third-party"],
             },
             "action": { "type": "block" },
@@ -220,17 +256,66 @@ type Slot = Rc<RefCell<Option<Retained<AnyObject>>>>;
 // ---------------------------------------------------------------------------
 // Was die Navigationsentscheidung über die Werbelisten wissen muss
 
+/// Eine Gruppe von Regellisten, die gemeinsam an einem Tab hängt oder nicht.
 #[derive(Default)]
-struct Ads {
-    enabled: bool,
-    /// Basisliste und große Listen, wie sie gerade gelten.
+struct Layer {
     lists: Vec<Retained<AnyObject>>,
     /// Abgelöste Listen, deren Platz nicht neu besetzt wurde.
     retired: Vec<Retained<AnyObject>>,
     /// Zählt hoch, wenn sich `lists` ändert.
     generation: u64,
+}
+
+impl Layer {
+    /// Setzt die geltenden Listen. Ohne Änderung passiert nichts.
+    fn replace(&mut self, current: Vec<Retained<AnyObject>>) {
+        let same = self.lists.len() == current.len()
+            && self.lists.iter().zip(&current).all(|(a, b)| Retained::as_ptr(a) == Retained::as_ptr(b));
+        if same {
+            return;
+        }
+        let name = |list: &Retained<AnyObject>| -> String {
+            let identifier: Option<Retained<NSString>> = unsafe { msg_send![&**list, identifier] };
+            identifier.map(|identifier| identifier.to_string()).unwrap_or_default()
+        };
+        let names: HashSet<String> = current.iter().map(name).collect();
+        // Was keinen Nachfolger gleichen Namens hat, muss ausdrücklich aus den Tabs.
+        let old = std::mem::replace(&mut self.lists, current);
+        self.retired = old.into_iter().filter(|list| !names.contains(&name(list))).collect();
+        self.generation += 1;
+    }
+
+    /// Hängt die Listen an oder nimmt sie ab. Eine neu übersetzte Liste
+    /// ersetzt dabei die alte gleichen Namens.
+    unsafe fn apply(&self, controller: *mut AnyObject, want: bool) {
+        for list in &self.retired {
+            let _: () = msg_send![controller, removeContentRuleList: &**list];
+        }
+        for list in &self.lists {
+            if want {
+                let _: () = msg_send![controller, addContentRuleList: &**list];
+            } else {
+                let _: () = msg_send![controller, removeContentRuleList: &**list];
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct Ads {
+    enabled: bool,
+    /// Basisliste und große Filterlisten: Werbung und Tracker.
+    layer: Layer,
     /// Websites, auf denen nicht gesperrt wird.
     off: HashSet<String>,
+    /// Gemeldete Betrugs- und Schadseiten – unabhängig vom Werbeblocker.
+    guard: Layer,
+    guard_enabled: bool,
+    /// Rechner, die jemand in dieser Sitzung ausdrücklich trotzdem öffnen wollte.
+    guard_off: HashSet<String>,
+    /// Verzeichnis der gemeldeten Adressen – für die Warnung, bevor ein Tab
+    /// eine solche Seite überhaupt öffnet (`guard_hit`).
+    guard_index: Option<filters::GuardIndex>,
     /// Tabs von Stealth-Fenstern: Dort wird gesperrt und das eigene Netz
     /// abgeschirmt, auch wenn beides sonst ausgeschaltet ist.
     forced: HashSet<usize>,
@@ -249,10 +334,16 @@ struct Ads {
 struct TabAds {
     /// Hängen die Listen dran – und in welchem Stand? `None`: noch nie abgeglichen.
     attached: Option<(bool, u64)>,
+    /// Dasselbe für die Listen gemeldeter Betrugs- und Schadseiten.
+    guarded: Option<(bool, u64)>,
     /// Die Seite, zu der der Tab zuletzt aufgebrochen ist (ohne `#abschnitt`).
     /// Daran zeigt sich, ob ein Abruf eine neue Seite ist oder nur ein Sprung
     /// innerhalb derselben – WebKit selbst gibt darüber keine verlässliche Auskunft.
     page: String,
+    /// Die Seite, die der Tab wirklich zeigt (zuletzt übernommen). Nach ihr
+    /// richten sich die Listen – nicht nach einer Adresse, zu der der Tab nur
+    /// aufgebrochen ist und nie ankam.
+    shown: String,
 }
 
 fn page_of(url: &str) -> &str {
@@ -263,26 +354,141 @@ thread_local! {
     static ADS: RefCell<Ads> = RefCell::new(Ads::default());
 }
 
+/// Bringt eine Schicht von Listen in den gewünschten Zustand. Ohne
+/// `may_detach` werden Listen nur angehängt, nie abgenommen: Dann bleibt, was
+/// hängt, bis die Seite wirklich da ist. Zurück kommt, was jetzt gilt.
+unsafe fn settle_layer(
+    layer: &Layer,
+    controller: *mut AnyObject,
+    current: Option<(bool, u64)>,
+    want: bool,
+    may_detach: bool,
+) -> Option<(bool, u64)> {
+    let target = match current {
+        _ if want => true,
+        None => false,
+        Some(_) if may_detach => false,
+        Some((attached, _)) => attached,
+    };
+    let state = (target, layer.generation);
+    if current != Some(state) {
+        layer.apply(controller, target);
+    }
+    Some(state)
+}
+
 /// Hängt die Werbelisten an einen Tab oder nimmt sie ab – je nachdem, welche
 /// Website er lädt. Ohne Änderung passiert nichts.
-unsafe fn sync_tab(ads: &mut Ads, key: usize, controller: *mut AnyObject, url: &str) {
-    let off = crate::sites::domain_of(url).is_some_and(|site| ads.off.contains(&site));
-    let want = (ads.enabled || ads.forced.contains(&key)) && !off;
-    let state = (want, ads.generation);
-    if controller.is_null() || ads.tabs.get(&key).is_some_and(|tab| tab.attached == Some(state)) {
+///
+/// `may_detach`: Die Listen dürfen auch abgenommen werden. Das gilt, wenn die
+/// Seite da ist oder der Mensch am Browser dorthin wollte – nicht, wenn eine
+/// Seite den Tab per Skript woandershin schickt. Sonst würde sie die Listen
+/// los, indem sie zu einer Website „aufbricht“, für die der Blocker aus ist,
+/// und nie dort ankommt.
+unsafe fn sync_tab(ads: &mut Ads, key: usize, controller: *mut AnyObject, url: &str, may_detach: bool) {
+    if controller.is_null() {
         return;
     }
-    for list in &ads.retired {
-        let _: () = msg_send![controller, removeContentRuleList: &**list];
+    // Zunders eigene Seiten (Start-, Warn- und Fehlerseite) gehen die Listen
+    // nichts an: Eine Regel aus einer Liste soll dort weder etwas sperren noch
+    // etwas ausblenden – schon gar nicht den Text einer Warnung.
+    let internal = url.starts_with("zunder:");
+    let forced = ads.forced.contains(&key);
+    let off = crate::sites::domain_of(url).is_some_and(|site| ads.off.contains(&site));
+    let want = (ads.enabled || forced) && !off && !internal;
+    let current = ads.tabs.get(&key).and_then(|tab| tab.attached);
+    let state = settle_layer(&ads.layer, controller, current, want, may_detach);
+    ads.tabs.entry(key).or_default().attached = state;
+    // Gemeldete Betrugs- und Schadseiten: Diese Listen hängen auch dort, wo
+    // der Werbeblocker für die Website abgeschaltet ist. Ausgenommen sind nur
+    // Rechner, die jemand in dieser Sitzung ausdrücklich trotzdem öffnen wollte.
+    let host = guard_key(url);
+    let want = (ads.guard_enabled || forced) && !ads.guard_off.contains(&host) && !internal;
+    let current = ads.tabs.get(&key).and_then(|tab| tab.guarded);
+    let state = settle_layer(&ads.guard, controller, current, want, may_detach);
+    ads.tabs.entry(key).or_default().guarded = state;
+}
+
+unsafe fn controller_of(webview: *mut AnyObject) -> *mut AnyObject {
+    let config: *mut AnyObject = msg_send![webview, configuration];
+    if config.is_null() {
+        return std::ptr::null_mut();
     }
-    for list in &ads.lists {
-        if want {
-            let _: () = msg_send![controller, addContentRuleList: &**list];
-        } else {
-            let _: () = msg_send![controller, removeContentRuleList: &**list];
+    msg_send![config, userContentController]
+}
+
+/// Der Tab hat eine Seite übernommen: Jetzt – und erst jetzt – gelten die
+/// Listen genau so, wie es zu dieser Seite gehört.
+pub fn committed(webview: &WebView, url: &str) {
+    let raw = Retained::as_ptr(&webview.webview()) as *mut AnyObject;
+    ADS.with(|ads| {
+        let mut ads = ads.borrow_mut();
+        let key = raw as usize;
+        let Some(tab) = ads.tabs.get_mut(&key) else {
+            return;
+        };
+        tab.shown = url.to_string();
+        tab.page = page_of(url).to_string();
+        unsafe {
+            let controller = controller_of(raw);
+            sync_tab(&mut ads, key, controller, url, true);
         }
+    });
+}
+
+/// Der Tab ist zu einer Adresse aufgebrochen und nicht angekommen (abgebrochen,
+/// Download, Antwort ohne Inhalt): Die Listen gelten wieder für die Seite, die
+/// er zeigt.
+///
+/// # Safety
+/// `webview` muss eine lebende WKWebView sein.
+pub unsafe fn revert(webview: *mut AnyObject) {
+    ADS.with(|ads| {
+        let mut ads = ads.borrow_mut();
+        let key = webview as usize;
+        let Some(tab) = ads.tabs.get_mut(&key) else {
+            return;
+        };
+        let shown = tab.shown.clone();
+        tab.page = page_of(&shown).to_string();
+        let controller = controller_of(webview);
+        sync_tab(&mut ads, key, controller, &shown, true);
+    });
+}
+
+/// Will dieser Tab zu einer gemeldeten Betrugs- oder Schadseite? (Aus
+/// `native::nav_policy`, bevor irgendetwas geladen wird.)
+pub fn guard_hit(key: usize, url: &str) -> bool {
+    ADS.with(|ads| {
+        let ads = ads.borrow();
+        if !(ads.guard_enabled || ads.forced.contains(&key)) {
+            return false;
+        }
+        let Some(index) = ads.guard_index.as_ref() else {
+            return false;
+        };
+        index.matches(url) && !ads.guard_off.contains(&guard_key(url))
+    })
+}
+
+/// Der Rechner einer Adresse, wie ihn die Ausnahmen der Sitzung führen – ohne
+/// den Punkt, der hinter jedem Namen stehen darf.
+fn guard_key(url: &str) -> String {
+    crate::shield::host_of(url).trim_end_matches('.').to_string()
+}
+
+/// Diesen Rechner in dieser Sitzung trotz Warnung öffnen (von der Rückfrage-Seite).
+pub fn guard_allow(host: &str) {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let plausible = !host.is_empty() && host.len() <= 253 && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']'));
+    if plausible {
+        ADS.with(|ads| {
+            let mut ads = ads.borrow_mut();
+            if ads.guard_off.len() < 500 {
+                ads.guard_off.insert(host);
+            }
+        });
     }
-    ads.tabs.entry(key).or_default().attached = Some(state);
 }
 
 /// Ein Tab bricht zu einer Adresse auf (aus `native::nav_policy`, bevor der
@@ -290,9 +496,12 @@ unsafe fn sync_tab(ads: &mut Ads, key: usize, controller: *mut AnyObject, url: &
 /// beim Neuladen (`reload`) – beginnt auch der Zähler neu; ein Sprung innerhalb
 /// derselben Seite lässt ihn stehen.
 ///
+/// `by_user`: Der Mensch am Browser hat das angestoßen (Eingabe, Klick,
+/// Verlauf). Nur dann werden Listen schon jetzt abgenommen, siehe `sync_tab`.
+///
 /// # Safety
 /// `webview` muss eine lebende WKWebView sein.
-pub unsafe fn site_changed(webview: *mut AnyObject, url: &str, reload: bool) {
+pub unsafe fn site_changed(webview: *mut AnyObject, url: &str, reload: bool, by_user: bool) {
     ADS.with(|ads| {
         let mut ads = ads.borrow_mut();
         let key = webview as usize;
@@ -305,12 +514,8 @@ pub unsafe fn site_changed(webview: *mut AnyObject, url: &str, reload: bool) {
         if fresh && ads.blocked.remove(&key).is_some() {
             ads.blocked_pending = true;
         }
-        let config: *mut AnyObject = msg_send![webview, configuration];
-        if config.is_null() {
-            return;
-        }
-        let controller: *mut AnyObject = msg_send![config, userContentController];
-        sync_tab(&mut ads, key, controller, url);
+        let controller = controller_of(webview);
+        sync_tab(&mut ads, key, controller, url, by_user);
     });
 }
 
@@ -334,15 +539,19 @@ pub fn equip(webview: &WebView, url: &str, fresh: bool) {
                 }
             }
         }
-        let known = match fresh {
+        let (known, shown) = match (fresh, ads.tabs.get(&key)) {
             // Eine neue WebView kann im Speicher dort liegen, wo früher eine andere lag.
-            true => None,
-            false => ads.tabs.get(&key).map(|tab| tab.page.clone()).filter(|page| !page.is_empty()),
+            (true, _) | (false, None) => (None, String::new()),
+            // Es zählt die Seite, die der Tab zeigt – nicht eine, zu der er nur aufgebrochen ist.
+            (false, Some(tab)) => {
+                let seen = if tab.shown.is_empty() { tab.page.clone() } else { tab.shown.clone() };
+                (Some(seen).filter(|page| !page.is_empty()), tab.shown.clone())
+            }
         };
         let page = known.unwrap_or_else(|| page_of(url).to_string());
-        ads.tabs.insert(key, TabAds { attached: None, page: page.clone() });
+        ads.tabs.insert(key, TabAds { attached: None, guarded: None, page: page_of(&page).to_string(), shown });
         let controller = Retained::as_ptr(&controller) as *mut AnyObject;
-        unsafe { sync_tab(&mut ads, key, controller, &page) };
+        unsafe { sync_tab(&mut ads, key, controller, &page, true) };
     });
 }
 
@@ -418,12 +627,18 @@ struct FilterState {
 }
 
 struct Big {
+    /// Welcher Satz das ist (Stelle in `KINDS`).
+    set: usize,
+    kind: &'static Kind,
     lists: Vec<(u32, Retained<AnyObject>)>,
     state: FilterState,
     building: bool,
     fetching: bool,
     /// Während des Baus kamen neuere Quellen: danach gleich noch einmal.
     again: bool,
+    /// Wann zuletzt online nachgesehen wurde (gleich, wie es ausging) – damit
+    /// ein Auffrischen, das immer wieder scheitert, nicht jede Minute neu losläuft.
+    tried: Option<std::time::Instant>,
     /// `…/filters` im Profil: aufgefrischte Listen, Vermerk, Speicher von WebKit.
     dir: PathBuf,
     store: Option<Retained<AnyObject>>,
@@ -431,21 +646,36 @@ struct Big {
 
 /// Nachrichten der Hintergrund-Arbeit an die App.
 pub enum FilterEvent {
-    Converted { lists: Vec<String>, rules: usize, stamps: Vec<String>, compat: bool },
-    Fetched { ok: bool, changed: bool },
+    Converted {
+        set: usize,
+        lists: Vec<String>,
+        rules: usize,
+        stamps: Vec<String>,
+        compat: bool,
+        /// Nur beim Satz der gemeldeten Betrugs- und Schadseiten.
+        index: Option<filters::GuardIndex>,
+    },
+    Fetched { set: usize, ok: bool, changed: bool },
+    /// Das Verzeichnis der gemeldeten Adressen, wenn die übersetzten Listen
+    /// schon bereitlagen und nur noch das Verzeichnis fehlte.
+    Index(filters::GuardIndex),
 }
 
 impl std::fmt::Debug for FilterEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Converted { lists, rules, .. } => write!(f, "Converted({} Listen, {rules} Regeln)", lists.len()),
-            Self::Fetched { ok, changed } => write!(f, "Fetched(ok: {ok}, changed: {changed})"),
+            Self::Converted { set, lists, rules, .. } => write!(f, "Converted(Satz {set}, {} Listen, {rules} Regeln)", lists.len()),
+            Self::Fetched { set, ok, changed } => write!(f, "Fetched(Satz {set}, ok: {ok}, changed: {changed})"),
+            Self::Index(index) => write!(f, "Index({} Einträge)", index.len()),
         }
     }
 }
 
 struct Build {
     queue: VecDeque<(u32, String)>,
+    /// Wie viele Listen es werden müssen. Fehlt am Ende eine, gilt der ganze
+    /// Bau als gescheitert – und es bleibt bei den Listen von vorher.
+    expected: usize,
     done: Vec<(u32, Retained<AnyObject>)>,
     key: String,
     rules: usize,
@@ -493,9 +723,9 @@ fn newer(candidate: &str, than: &str) -> bool {
 }
 
 /// Je Quelle die neuere Fassung: die beiliegende oder die aufgefrischte.
-fn active_sources(dir: &Path) -> Vec<(PathBuf, String)> {
-    let bundled = bundled_dir();
-    filters::SOURCES
+fn active_sources(dir: &Path, kind: &Kind) -> Vec<(PathBuf, String)> {
+    let bundled = if kind.bundled { bundled_dir() } else { None };
+    kind.sources
         .iter()
         .filter_map(|source| {
             let name = format!("{}.txt", source.name);
@@ -510,26 +740,26 @@ fn active_sources(dir: &Path) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-fn save_state(dir: &Path, state: &FilterState) {
+fn save_state(dir: &Path, kind: &Kind, state: &FilterState) {
     if let Ok(text) = serde_json::to_string(state) {
-        let _ = std::fs::write(dir.join("state.json"), text);
+        let _ = std::fs::write(dir.join(kind.state_file), text);
     }
 }
 
 /// Liest die Quellen und übersetzt sie – im Hintergrund, die Oberfläche läuft weiter.
 fn start_build(big: &Rc<RefCell<Big>>, proxy: &EventLoopProxy<UserEvent>) {
-    let (sources, compat) = {
+    let (sources, compat, set, guard) = {
         let mut big = big.borrow_mut();
         if big.building {
             big.again = true;
             return;
         }
-        let sources = active_sources(&big.dir);
+        let sources = active_sources(&big.dir, big.kind);
         if sources.is_empty() || big.store.is_none() {
             return;
         }
         big.building = true;
-        (sources, big.state.compat)
+        (sources, big.state.compat, big.set, big.kind.guard)
     };
     let proxy = proxy.clone();
     std::thread::spawn(move || {
@@ -545,8 +775,14 @@ fn start_build(big: &Rc<RefCell<Big>>, proxy: &EventLoopProxy<UserEvent>) {
             }
         }
         let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-        let converted = filters::convert(&refs, compat);
+        let converted = match guard {
+            true => filters::convert_guard(&refs, compat),
+            false => filters::convert(&refs, compat),
+        };
+        let index = guard.then(|| filters::guard_index(&refs));
         let _ = proxy.send_event(UserEvent::Filters(FilterEvent::Converted {
+            set,
+            index,
             lists: converted.lists,
             rules: converted.stats.rules(),
             stamps,
@@ -559,6 +795,7 @@ fn start_build(big: &Rc<RefCell<Big>>, proxy: &EventLoopProxy<UserEvent>) {
 fn compile_next(big: Rc<RefCell<Big>>, proxy: EventLoopProxy<UserEvent>, build: Rc<RefCell<Build>>) {
     let next = build.borrow_mut().queue.pop_front();
     let store = big.borrow().store.clone();
+    let prefix = big.borrow().kind.prefix;
     let (Some((slot, rules)), Some(store)) = (next, store) else {
         finish_build(big, proxy, build);
         return;
@@ -573,7 +810,7 @@ fn compile_next(big: Rc<RefCell<Big>>, proxy: EventLoopProxy<UserEvent>, build: 
     unsafe {
         let _: () = msg_send![
             &*store,
-            compileContentRuleListForIdentifier: &*NSString::from_str(&format!("{FILTER_PREFIX}-{slot}")),
+            compileContentRuleListForIdentifier: &*NSString::from_str(&format!("{prefix}-{slot}")),
             encodedContentRuleList: &*NSString::from_str(&rules),
             completionHandler: &*done
         ];
@@ -581,7 +818,7 @@ fn compile_next(big: Rc<RefCell<Big>>, proxy: EventLoopProxy<UserEvent>, build: 
 }
 
 fn finish_build(big: Rc<RefCell<Big>>, proxy: EventLoopProxy<UserEvent>, build: Rc<RefCell<Build>>) {
-    let (done, key, rules, stamps, compat) = {
+    let (done, key, rules, stamps, compat, expected) = {
         let mut build = build.borrow_mut();
         (
             std::mem::take(&mut build.done),
@@ -589,12 +826,30 @@ fn finish_build(big: Rc<RefCell<Big>>, proxy: EventLoopProxy<UserEvent>, build: 
             build.rules,
             std::mem::take(&mut build.stamps),
             build.compat,
+            build.expected,
         )
     };
     let again = {
         let mut big = big.borrow_mut();
         big.building = false;
-        if done.is_empty() {
+        if !done.is_empty() && done.len() < expected {
+            // WebKit hat einen Teil der Listen nicht angenommen. Ein halber Satz
+            // wäre ein Schutz mit Löchern, von denen niemand weiß: Es bleibt bei
+            // den Listen von vorher, und was neu übersetzt wurde, kommt wieder weg.
+            if let Some(store) = big.store.clone() {
+                for (slot, _) in &done {
+                    let removed = RcBlock::new(|_error: *mut AnyObject| {});
+                    unsafe {
+                        let _: () = msg_send![
+                            &*store,
+                            removeContentRuleListForIdentifier: &*NSString::from_str(&format!("{}-{slot}", big.kind.prefix)),
+                            completionHandler: &*removed
+                        ];
+                    }
+                }
+            }
+            std::mem::take(&mut big.again)
+        } else if done.is_empty() {
             // Nichts ließ sich übersetzen: einmal in der Schreibweise für
             // ältere WebKit-Fassungen versuchen, sonst bleibt alles beim Alten.
             let retry = !compat;
@@ -610,7 +865,7 @@ fn finish_build(big: Rc<RefCell<Big>>, proxy: EventLoopProxy<UserEvent>, build: 
                     unsafe {
                         let _: () = msg_send![
                             &*store,
-                            removeContentRuleListForIdentifier: &*NSString::from_str(&format!("{FILTER_PREFIX}-{old}")),
+                            removeContentRuleListForIdentifier: &*NSString::from_str(&format!("{}-{old}", big.kind.prefix)),
                             completionHandler: &*removed
                         ];
                     }
@@ -622,7 +877,7 @@ fn finish_build(big: Rc<RefCell<Big>>, proxy: EventLoopProxy<UserEvent>, build: 
             big.state.rules = rules;
             big.state.stamps = stamps;
             big.state.compat = compat;
-            save_state(&big.dir, &big.state);
+            save_state(&big.dir, big.kind, &big.state);
             std::mem::take(&mut big.again)
         }
     };
@@ -634,7 +889,13 @@ fn finish_build(big: Rc<RefCell<Big>>, proxy: EventLoopProxy<UserEvent>, build: 
 
 /// Holt die Listen neu von ihren Betreibern. Übernommen wird nur, was wie eine
 /// vollständige, neuere Liste aussieht – nie eine Fehlerseite, nie ein Bruchstück.
-fn fetch_lists(dir: PathBuf, current: Vec<(String, u64)>, base: Option<String>, proxy: EventLoopProxy<UserEvent>) {
+fn fetch_lists(
+    dir: PathBuf,
+    set: usize,
+    current: Vec<(String, u64)>,
+    base: Option<String>,
+    proxy: EventLoopProxy<UserEvent>,
+) {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30))
@@ -645,7 +906,7 @@ fn fetch_lists(dir: PathBuf, current: Vec<(String, u64)>, base: Option<String>, 
         .build();
     let mut ok = true;
     let mut changed = false;
-    for (source, (stamp, size)) in filters::SOURCES.iter().zip(current) {
+    for (source, (stamp, size)) in KINDS[set].sources.iter().zip(current) {
         let url = match &base {
             Some(base) => format!("{}/{}.txt", base.trim_end_matches('/'), source.name),
             None => source.url.to_string(),
@@ -674,7 +935,7 @@ fn fetch_lists(dir: PathBuf, current: Vec<(String, u64)>, base: Option<String>, 
             Err(_) => ok = false,
         }
     }
-    let _ = proxy.send_event(UserEvent::Filters(FilterEvent::Fetched { ok, changed }));
+    let _ = proxy.send_event(UserEvent::Filters(FilterEvent::Fetched { set, ok, changed }));
 }
 
 pub struct Blocker {
@@ -685,10 +946,13 @@ pub struct Blocker {
     /// welche Websites dorthin dürfen.
     local: Slot,
     pub local_enabled: bool,
-    /// Die großen Filterlisten.
-    big: Rc<RefCell<Big>>,
-    /// Die Listen von selbst auffrischen.
+    /// Die großen Listen: Satz 0 Werbung und Tracker, Satz 1 gemeldete
+    /// Betrugs- und Schadseiten (siehe `KINDS`).
+    sets: Vec<Rc<RefCell<Big>>>,
+    /// Die Werbelisten von selbst auffrischen.
     pub auto_update: bool,
+    /// Vor gemeldeten Betrugs- und Schadseiten schützen.
+    pub guard_enabled: bool,
     /// Wie viele Übersetzungen noch laufen. Solange beim Start eine läuft,
     /// warten die ersten Tabs – sonst lüde eine Seite kurz ganz ohne Schutz.
     /// (Das erstmalige Übersetzen der großen Listen zählt nicht mit: Es dauert
@@ -707,15 +971,12 @@ impl Blocker {
         allowed: &[String],
         off: HashSet<String>,
         auto_update: bool,
+        guard_enabled: bool,
         data_dir: &Path,
         proxy: EventLoopProxy<UserEvent>,
     ) -> Self {
         let dir = data_dir.join("filters");
         let _ = std::fs::create_dir_all(dir.join("webkit"));
-        let state: FilterState = std::fs::read_to_string(dir.join("state.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
         // Ein eigener Speicher im Profil: Mit dem Profil verschwinden auch die Listen.
         let store: Option<Retained<AnyObject>> = unsafe {
             let url: Option<Retained<AnyObject>> = msg_send![
@@ -729,29 +990,47 @@ impl Blocker {
             let mut ads = ads.borrow_mut();
             ads.enabled = enabled;
             ads.local_enabled = local_enabled;
+            ads.guard_enabled = guard_enabled;
             ads.off = off;
         });
+        let sets = KINDS
+            .iter()
+            .enumerate()
+            .map(|(set, kind)| {
+                let state: FilterState = std::fs::read_to_string(dir.join(kind.state_file))
+                    .ok()
+                    .and_then(|text| serde_json::from_str(&text).ok())
+                    .unwrap_or_default();
+                Rc::new(RefCell::new(Big {
+                    set,
+                    kind,
+                    lists: Vec::new(),
+                    state,
+                    building: false,
+                    fetching: false,
+                    again: false,
+                    tried: None,
+                    dir: dir.clone(),
+                    store: store.clone(),
+                }))
+            })
+            .collect();
         let blocker = Self {
             list: Rc::new(RefCell::new(None)),
             enabled,
             local: Rc::new(RefCell::new(None)),
             local_enabled,
-            big: Rc::new(RefCell::new(Big {
-                lists: Vec::new(),
-                state,
-                building: false,
-                fetching: false,
-                again: false,
-                dir,
-                store,
-            })),
+            sets,
             auto_update,
+            guard_enabled,
             pending: Rc::new(Cell::new(0)),
             proxy,
         };
         blocker.compile(&format!("{BASIS_PREFIX}-1"), &rules_json(), blocker.list.clone());
         blocker.compile_local(allowed);
-        blocker.restore_big();
+        for set in &blocker.sets {
+            blocker.restore_big(set);
+        }
         // Meldet sich WebKit nicht, geht es trotzdem weiter.
         let proxy = blocker.proxy.clone();
         std::thread::spawn(move || {
@@ -763,27 +1042,38 @@ impl Blocker {
 
     /// Holt die großen Listen aus dem Speicher von WebKit – oder übersetzt sie
     /// neu, wenn sich Quellen oder Übersetzer geändert haben.
-    fn restore_big(&self) {
-        let (slots, store, fits) = {
-            let big = self.big.borrow();
-            let stamps: Vec<String> = active_sources(&big.dir).into_iter().map(|(_, stamp)| stamp).collect();
+    fn restore_big(&self, set: &Rc<RefCell<Big>>) {
+        let (slots, store, fits, prefix) = {
+            let big = set.borrow();
+            let stamps: Vec<String> = active_sources(&big.dir, big.kind).into_iter().map(|(_, stamp)| stamp).collect();
             let fits = !stamps.is_empty()
                 && !big.state.slots.is_empty()
                 && big.state.key == state_key(&stamps, big.state.compat);
-            (big.state.slots.clone(), big.store.clone(), fits)
+            (big.state.slots.clone(), big.store.clone(), fits, big.kind.prefix)
         };
         let Some(store) = store else {
             return;
         };
         if !fits {
-            start_build(&self.big, &self.proxy);
+            start_build(set, &self.proxy);
             return;
+        }
+        // Die übersetzten Listen liegen bereit. Das Verzeichnis für die Warnung
+        // vor dem Öffnen entsteht aus denselben Quellen neu – im Hintergrund.
+        if set.borrow().kind.guard {
+            let sources = active_sources(&set.borrow().dir, set.borrow().kind);
+            let proxy = self.proxy.clone();
+            std::thread::spawn(move || {
+                let texts: Vec<String> = sources.iter().filter_map(|(path, _)| std::fs::read_to_string(path).ok()).collect();
+                let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+                let _ = proxy.send_event(UserEvent::Filters(FilterEvent::Index(filters::guard_index(&refs))));
+            });
         }
         let remaining = Rc::new(Cell::new(slots.len()));
         let missing = Rc::new(Cell::new(false));
         for slot in slots {
             self.pending.set(self.pending.get() + 1);
-            let (big, pending, proxy) = (self.big.clone(), self.pending.clone(), self.proxy.clone());
+            let (big, pending, proxy) = (set.clone(), self.pending.clone(), self.proxy.clone());
             let (remaining, missing) = (remaining.clone(), missing.clone());
             let done = RcBlock::new(move |found: *mut AnyObject, _error: *mut AnyObject| {
                 pending.set(pending.get().saturating_sub(1));
@@ -802,7 +1092,7 @@ impl Blocker {
             unsafe {
                 let _: () = msg_send![
                     &*store,
-                    lookUpContentRuleListForIdentifier: &*NSString::from_str(&format!("{FILTER_PREFIX}-{slot}")),
+                    lookUpContentRuleListForIdentifier: &*NSString::from_str(&format!("{prefix}-{slot}")),
                     completionHandler: &*done
                 ];
             }
@@ -812,72 +1102,108 @@ impl Blocker {
     /// Nachricht der Hintergrund-Arbeit (Übersetzen, Auffrischen).
     pub fn on_event(&mut self, event: FilterEvent) {
         match event {
-            FilterEvent::Converted { lists, rules, stamps, compat } => {
+            FilterEvent::Index(index) => ADS.with(|ads| ads.borrow_mut().guard_index = Some(index)),
+            FilterEvent::Converted { set, lists, rules, stamps, compat, index } => {
+                let Some(big) = self.sets.get(set).cloned() else {
+                    return;
+                };
+                if let Some(index) = index {
+                    ADS.with(|ads| ads.borrow_mut().guard_index = Some(index));
+                }
                 if lists.is_empty() {
-                    self.big.borrow_mut().building = false;
+                    big.borrow_mut().building = false;
                     return;
                 }
+                // Neue Listen bekommen eigene Nummern: So überschreibt ein Bau,
+                // der scheitert, nichts von dem, was gerade gilt.
+                let base = {
+                    let big = big.borrow();
+                    let next = big.state.slots.iter().max().map_or(0, |highest| (highest / 100 + 1) * 100);
+                    if next > 900_000 { 0 } else { next }
+                };
                 let build = Build {
-                    queue: lists.into_iter().enumerate().map(|(slot, rules)| (slot as u32, rules)).collect(),
+                    expected: lists.len(),
+                    queue: lists.into_iter().enumerate().map(|(slot, rules)| (base + slot as u32, rules)).collect(),
                     done: Vec::new(),
                     key: state_key(&stamps, compat),
                     rules,
                     stamps,
                     compat,
                 };
-                compile_next(self.big.clone(), self.proxy.clone(), Rc::new(RefCell::new(build)));
+                compile_next(big, self.proxy.clone(), Rc::new(RefCell::new(build)));
             }
-            FilterEvent::Fetched { ok, changed } => {
+            FilterEvent::Fetched { set, ok, changed } => {
+                let Some(big) = self.sets.get(set).cloned() else {
+                    return;
+                };
                 {
-                    let mut big = self.big.borrow_mut();
+                    let mut big = big.borrow_mut();
                     big.fetching = false;
                     if ok {
                         big.state.checked = now_secs();
-                        save_state(&big.dir, &big.state);
+                        save_state(&big.dir, big.kind, &big.state);
                     }
                 }
                 if changed {
-                    start_build(&self.big, &self.proxy);
+                    start_build(&big, &self.proxy);
                 }
             }
         }
     }
 
     /// Sieht online nach neueren Listen. Ohne `force` nur, wenn es an der Zeit
-    /// ist und das Auffrischen eingeschaltet ist. `true`: Es wurde angestoßen.
+    /// ist und der jeweilige Schutz eingeschaltet ist. `true`: Es wurde angestoßen.
     pub fn refresh(&self, force: bool) -> bool {
         let Some(base) = update_base() else {
             return false;
         };
-        let mut big = self.big.borrow_mut();
-        if big.fetching || big.building || big.store.is_none() {
-            return false;
+        let mut started = false;
+        for set in &self.sets {
+            let mut big = set.borrow_mut();
+            if big.fetching || big.building || big.store.is_none() {
+                continue;
+            }
+            let wanted = match big.kind.guard {
+                true => self.guard_enabled,
+                false => self.auto_update && self.enabled,
+            };
+            let due = wanted && now_secs().saturating_sub(big.state.checked) >= big.kind.refresh_after.as_secs();
+            if !due && !(force && !big.kind.guard) {
+                continue;
+            }
+            // Nach einem Versuch – auch einem gescheiterten – ist eine halbe
+            // Stunde Ruhe, außer jemand drückt selbst auf „Jetzt auffrischen“.
+            if !force && big.tried.is_some_and(|at| at.elapsed() < Duration::from_secs(1800)) {
+                continue;
+            }
+            big.tried = Some(std::time::Instant::now());
+            let active = active_sources(&big.dir, big.kind);
+            let current: Vec<(String, u64)> = big
+                .kind
+                .sources
+                .iter()
+                .map(|source| {
+                    let name = format!("{}.txt", source.name);
+                    active
+                        .iter()
+                        .find(|(path, _)| path.file_name().is_some_and(|file| file.to_string_lossy() == name))
+                        .map(|(path, stamp)| (stamp.clone(), std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)))
+                        .unwrap_or_default()
+                })
+                .collect();
+            big.fetching = true;
+            let (dir, index, proxy, base) = (big.dir.clone(), big.set, self.proxy.clone(), base.clone());
+            std::thread::spawn(move || fetch_lists(dir, index, current, base, proxy));
+            started = true;
         }
-        let due = self.auto_update && self.enabled && now_secs().saturating_sub(big.state.checked) >= REFRESH_AFTER.as_secs();
-        if !force && !due {
-            return false;
-        }
-        let active = active_sources(&big.dir);
-        let current: Vec<(String, u64)> = filters::SOURCES
-            .iter()
-            .map(|source| {
-                let name = format!("{}.txt", source.name);
-                active
-                    .iter()
-                    .find(|(path, _)| path.file_name().is_some_and(|file| file.to_string_lossy() == name))
-                    .map(|(path, stamp)| (stamp.clone(), std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)))
-                    .unwrap_or_default()
-            })
-            .collect();
-        big.fetching = true;
-        let (dir, proxy) = (big.dir.clone(), self.proxy.clone());
-        std::thread::spawn(move || fetch_lists(dir, current, base, proxy));
-        true
+        started
     }
 
     /// Für die Einstellungen: wie viele Regeln gelten, von wann die Listen sind.
     pub fn info(&self) -> serde_json::Value {
-        let big = self.big.borrow();
+        let guard = self.sets[1].borrow();
+        let guard_rules = if guard.lists.is_empty() { 0 } else { guard.state.rules };
+        let big = self.sets[0].borrow();
         let ready = !big.lists.is_empty();
         serde_json::json!({
             "rules": if ready { big.state.rules } else { 0 },
@@ -886,6 +1212,9 @@ impl Blocker {
             "lists": big.lists.len(),
             "titles": filters::SOURCES.iter().map(|source| source.title).collect::<Vec<_>>(),
             "canRefresh": update_base().is_some(),
+            // Gemeldete Betrugs- und Schadseiten: wie viele Adressen gerade gesperrt sind.
+            "guardRules": guard_rules,
+            "guardBusy": guard.building || guard.fetching,
         })
     }
 
@@ -938,35 +1267,25 @@ impl Blocker {
         self.local.borrow().is_some()
     }
 
-    /// Macht bekannt, welche Werbelisten jetzt gelten (nach jeder fertigen
+    /// Macht bekannt, welche Listen jetzt gelten (nach jeder fertigen
     /// Übersetzung). Danach rüstet `apply` die Tabs um.
     pub fn publish(&self) {
+        let sorted = |set: &Rc<RefCell<Big>>| -> Vec<Retained<AnyObject>> {
+            let mut lists: Vec<(u32, Retained<AnyObject>)> = set.borrow().lists.clone();
+            lists.sort_by_key(|(slot, _)| *slot);
+            lists.into_iter().map(|(_, list)| list).collect()
+        };
         let mut current: Vec<Retained<AnyObject>> = Vec::new();
         if let Some(list) = self.list.borrow().as_ref() {
             current.push(list.clone());
         }
-        let mut big: Vec<(u32, Retained<AnyObject>)> = self.big.borrow().lists.clone();
-        big.sort_by_key(|(slot, _)| *slot);
-        current.extend(big.into_iter().map(|(_, list)| list));
+        current.extend(sorted(&self.sets[0]));
+        let guard = sorted(&self.sets[1]);
+        self.settle();
         ADS.with(|ads| {
             let mut ads = ads.borrow_mut();
-            ads.enabled = self.enabled;
-            ads.local_enabled = self.local_enabled;
-            ads.local = self.local.borrow().clone();
-            let same = ads.lists.len() == current.len()
-                && ads.lists.iter().zip(&current).all(|(a, b)| Retained::as_ptr(a) == Retained::as_ptr(b));
-            if same {
-                return;
-            }
-            let name = |list: &Retained<AnyObject>| -> String {
-                let identifier: Option<Retained<NSString>> = unsafe { msg_send![&**list, identifier] };
-                identifier.map(|identifier| identifier.to_string()).unwrap_or_default()
-            };
-            let names: HashSet<String> = current.iter().map(name).collect();
-            // Was keinen Nachfolger gleichen Namens hat, muss ausdrücklich aus den Tabs.
-            let old = std::mem::replace(&mut ads.lists, current);
-            ads.retired = old.into_iter().filter(|list| !names.contains(&name(list))).collect();
-            ads.generation += 1;
+            ads.layer.replace(current);
+            ads.guard.replace(guard);
         });
     }
 
@@ -986,6 +1305,7 @@ impl Blocker {
         ADS.with(|ads| {
             let mut ads = ads.borrow_mut();
             ads.enabled = self.enabled;
+            ads.guard_enabled = self.guard_enabled;
             ads.local_enabled = self.local_enabled;
             ads.local = self.local.borrow().clone();
         });
@@ -1015,7 +1335,7 @@ mod tests {
         assert_eq!(rules.len(), DOMAINS.len() + PATTERNS.len());
         assert_eq!(
             rules[0]["trigger"]["url-filter"],
-            "^[^:]+://+([^:/]+\\.)?doubleclick\\.net[:/]"
+            "^[^:]+://+([^:/]+\\.)?doubleclick\\.net\\.?[:/]"
         );
     }
 
@@ -1037,10 +1357,10 @@ mod tests {
             // Alle Geräte-Muster, Dateien, interne Seiten und die eine brauchbare erlaubte Website.
             assert_eq!(exempt.len(), LOCAL_HOSTS.len() + 3);
             assert!(exempt.iter().any(|e| e == "^zunder:"));
-            assert!(exempt.iter().any(|e| e.as_str().is_some_and(|e| e.ends_with("([^/:]*\\.)?plex\\.tv[:/]"))));
+            assert!(exempt.iter().any(|e| e.as_str().is_some_and(|e| e.ends_with("([^/:]*\\.)?plex\\.tv\\.?[:/]"))));
         }
         let filters: Vec<&str> = rules.iter().map(|r| r["trigger"]["url-filter"].as_str().unwrap()).collect();
-        assert!(filters.contains(&"^[hw][a-z]+://+([^/@]*@)?192\\.168\\.[0-9]+\\.[0-9]+[:/]"));
-        assert!(filters.contains(&"^[hw][a-z]+://+([^/@]*@)?localhost[:/]"));
+        assert!(filters.contains(&"^[hw][a-z]+://+([^/@]*@)?192\\.168\\.[0-9]+\\.[0-9]+\\.?[:/]"));
+        assert!(filters.contains(&"^[hw][a-z]+://+([^/@]*@)?localhost\\.?[:/]"));
     }
 }

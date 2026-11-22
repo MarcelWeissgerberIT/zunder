@@ -272,11 +272,29 @@ impl App {
         if tab.favicon.is_none() && !private {
             tab.favicon = self.store.favicon_for(&tab.url);
         }
-        // Der Lesemodus gehört zur alten Seite.
+        // Der Lesemodus gehört zur alten Seite – ebenso ihre Sprache und ihre Übersetzung.
         tab.reader = false;
         tab.readable = false;
+        tab.lang.clear();
+        let translated = tab.translation.take();
+        // Der Seitencheck beginnt neu – mit dem, was der Server zu dieser Seite mitgeschickt hat.
+        tab.check = crate::sitecheck::State::default();
+        if let Some(webview) = &tab.webview {
+            tab.check.response = native::response_for(webview, &tab.url);
+            // Die Seite ist da: Die Listen gelten jetzt für genau sie.
+            crate::blocker::committed(webview, &tab.url);
+        }
+        tab.check.refresh(&tab.url);
         win.dirty = true;
         win.send(json!({ "t": "committed", "id": tab_id_of(win, index) }));
+        let (committed_tab, committed_site) = (tab_id_of(win, index), crate::shield::host_of(&win.tabs[index].url));
+        if let Some(translation) = translated {
+            // Stand dort noch der Fortschritt einer Übersetzung, hat er sich erledigt.
+            win.send(json!({ "t": "noticeHide", "id": translation.notice_id() }));
+            self.notices.remove(&translation.notice_id());
+        }
+        // Was die vorige Website in diesem Tab gefragt hat, gilt für die neue nicht.
+        self.notices_end(window, committed_tab, Some(&committed_site));
         self.session_changed();
         // Passwort-Tresor: Wurde gerade eine Anmeldung abgeschickt, darf er jetzt fragen.
         self.login_committed(window, index);
@@ -303,13 +321,15 @@ impl App {
         let Some(site) = crate::sites::domain_of(&tab.url) else {
             return;
         };
-        if !self.wall_noticed.insert(site.clone()) {
+        if self.wall_noticed.contains(&site) {
             return;
         }
         let tab_id = tab.id;
         let text = t("n_adwall").replace("{site}", &site);
         let label = t("n_adwall_off").replace("{site}", &site);
-        self.notice(window, text, Some((&label, NoticeAction::BlockerOff(window, tab_id, site))), 30000);
+        if self.notice_from(window, tab_id, text, Some((&label, NoticeAction::BlockerOff(window, tab_id, site.clone()))), 30000) {
+            self.wall_noticed.insert(site);
+        }
     }
 
     fn page_finished(&mut self, window: WindowId, index: usize, url: String) {
@@ -345,6 +365,10 @@ impl App {
         // Die fertige Seite, solange sie vorn ist: ihr Vorschaubild für die Übersicht.
         if active {
             self.capture_thumb(window, index);
+        }
+        // Jetzt steht die Seite da: Skripte, Formulare, Cookies ansehen.
+        if let Some(tab_id) = self.windows.get(&window).and_then(|win| win.tabs.get(index)).map(|tab| tab.id) {
+            self.check_page(window, tab_id);
         }
         crate::app::debug_timing("seite_geladen");
     }
@@ -416,7 +440,8 @@ impl App {
             // Netz dauerhaft erlaubt. Dass die Meldung von dort kommt, ist
             // schon geprüft (`native::bridge_received`).
             let site = site.to_string();
-            self.allow_local_site(&site);
+            let private = private || self.windows.get(&window).is_none_or(|win| win.stealth);
+            self.allow_local_site(&site, private);
             return;
         }
 
@@ -425,7 +450,12 @@ impl App {
             // nebeneinander, folgt die Symbolleiste dem, in dem gearbeitet wird.
             // Mehr bewirkt die Meldung nicht – und nur innerhalb des Paars.
             let id = win.tabs[index].id;
-            if win.in_split(id) && win.active != index {
+            // Die Meldung kommt aus der Welt der Seite – also zählt sie nur, wenn
+            // diese Seite die Tastatur wirklich hat. Sonst könnte eine Seite sich
+            // selbst zur aktiven Hälfte erklären, und Symbolleiste wie Tastenkürzel
+            // gälten ihr statt der Seite, in der gearbeitet wird.
+            let focused = win.tabs[index].webview.as_ref().is_some_and(native::has_keyboard);
+            if focused && win.in_split(id) && win.active != index {
                 let previous = win.active;
                 if let Some(tab) = win.tabs.get_mut(previous) {
                     tab.last_used = std::time::Instant::now();
@@ -513,20 +543,36 @@ impl App {
             return;
         }
         self.last_external = Some(std::time::Instant::now());
+        // Der Hinweis nennt die Website, die fragt – und gehört zu ihr: Zeigt
+        // der Tab etwas anderes, gilt der Knopf nicht mehr.
+        let site = self.asking_site(window, tab);
         if REFUSED_SCHEMES.contains(&scheme.as_str()) {
-            self.notice(window, t("n_external_refused").replace("{scheme}", &scheme), None, 8000);
+            let text = t("n_external_refused").replace("{site}", &site).replace("{scheme}", &scheme);
+            self.notice_from(window, tab, text, None, 8000);
             return;
         }
         let text = match app_for_scheme(&scheme) {
-            Some(app) => t("n_external").replace("{app}", app),
-            None => t("n_external_generic").replace("{scheme}", &scheme),
+            Some(app) => t("n_external").replace("{site}", &site).replace("{app}", app),
+            None => t("n_external_generic").replace("{site}", &site).replace("{scheme}", &scheme),
         };
-        self.notice(
+        self.notice_from(
             window,
+            tab,
             text,
             Some((t("open"), NoticeAction::OpenExternal(parsed.to_string()))),
             15000,
         );
+    }
+
+    /// Wie die Website heißt, deren Seite ein Tab gerade zeigt – für Hinweise,
+    /// die sagen, wer etwas möchte. Lässt sie sich nicht nennen: „Diese Seite“.
+    fn asking_site(&self, window: WindowId, tab: TabId) -> String {
+        self.windows
+            .get(&window)
+            .and_then(|win| win.tabs.iter().find(|candidate| candidate.id == tab))
+            .map(|tab| crate::shield::host_of(&tab.url))
+            .filter(|host| !host.is_empty())
+            .unwrap_or_else(|| t("n_this_page").to_string())
     }
 
     /// Ein Tab wollte eine unverschlüsselte Seite laden. Zuerst wird die
@@ -624,6 +670,8 @@ impl App {
         for (key, value) in pairs {
             page.query_pairs_mut().append_pair(key, value);
         }
+        // Das Siegel dieses Starts: Ohne es lädt Zunder keine Warnseite.
+        page.query_pairs_mut().append_pair("z", native::seal());
         tab.upgrade = None;
         tab.pending = None;
         tab.typed = false;
@@ -647,9 +695,13 @@ impl App {
             );
             return;
         }
-        let text = t("n_local_window").replace("{target}", &target);
+        let Some(tab) = self.windows.get(&window).and_then(|win| win.tabs.get(index)).map(|tab| tab.id) else {
+            return;
+        };
+        let site = self.asking_site(window, tab);
+        let text = t("n_local_window").replace("{site}", &site).replace("{target}", &target);
         let action = replay.then(|| (t("open"), NoticeAction::OpenTab(url.to_string())));
-        self.notice(window, text, action, 12000);
+        self.notice_from(window, tab, text, action, 12000);
     }
 
     /// Eine Seite wollte im Hintergrund ein Gerät im eigenen Netz ansprechen und
@@ -664,17 +716,16 @@ impl App {
         };
         let target = crate::shield::host_of(url);
         let over_network = ["http://", "https://", "ws://", "wss://"].iter().any(|scheme| url.starts_with(scheme));
-        if !over_network || target.is_empty() || crate::shield::is_local_host(&site) || !self.local_noticed.insert(site.clone()) {
+        if !over_network || target.is_empty() || crate::shield::is_local_host(&site) || self.local_noticed.contains(&site) {
             return;
         }
         let tab_id = tab.id;
         let text = t("n_local_blocked").replace("{site}", &site).replace("{target}", &target);
-        self.notice(
-            window,
-            text,
-            Some((t("allow"), NoticeAction::AllowLocal(window, tab_id, site))),
-            14000,
-        );
+        // „Einmal je Website“ zählt erst, wenn der Hinweis wirklich zu sehen war –
+        // ein Tab im Hintergrund meldet sich, sobald er vorn ist und es wieder versucht.
+        if self.notice_from(window, tab_id, text, Some((t("allow"), NoticeAction::AllowLocal(window, tab_id, site.clone()))), 14000) {
+            self.local_noticed.insert(site);
+        }
     }
 
     /// Ereignisse der nachgerüsteten WebKit-Rückrufe.
@@ -754,6 +805,7 @@ impl App {
                 if let Some(plain) = &plain {
                     page.query_pairs_mut().append_pair("p", plain);
                 }
+                page.query_pairs_mut().append_pair("z", native::seal());
                 if let Some(webview) = &tab.webview {
                     tab.loading = true;
                     native::expect_internal(page.as_str());
@@ -807,6 +859,17 @@ impl App {
                 self.local_request(window, index, &url, &from, in_place, replay)
             }
             NavKind::LocalBlocked { url } => self.local_blocked(window, index, &url),
+            NavKind::OAuthCode { url } => self.oauth_returned(window, index, &url),
+            NavKind::Guard { url, in_place } => {
+                // Eine gemeldete Betrugs- oder Schadseite: im Tab die Warnung,
+                // bei einem neuen Fenster ein Hinweis – geöffnet wird es nicht.
+                if in_place {
+                    self.show_interstitial(window, index, &[("v", "guard"), ("u", &url)]);
+                } else {
+                    let text = t("n_guard_window").replace("{host}", &host_of(&url));
+                    self.warn(window, text, 9000);
+                }
+            }
             NavKind::Closed => {
                 // window.close(): nur von der Seite selbst geöffnete Tabs schließen.
                 let scripted = self

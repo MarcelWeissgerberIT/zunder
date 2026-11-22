@@ -106,8 +106,36 @@
     return node;
   }
 
+  const groupNodes = new Map();
+
+  function groupOf(id) {
+    return (state.groups || []).find((group) => group.id === id) || null;
+  }
+
+  // Der Kopf einer Tab-Gruppe: Farbe und Name; ein Klick klappt sie zu oder auf.
+  function groupChip(group, count) {
+    let node = groupNodes.get(group.id);
+    if (!node) {
+      node = el('div', 'gchip');
+      node.dataset.group = String(group.id);
+      node.appendChild(el('span', 'n'));
+      node.appendChild(el('span', 'k'));
+      groupNodes.set(group.id, node);
+    }
+    node.className = 'gchip gc' + group.color + (group.collapsed ? ' closed' : '');
+    node.querySelector('.n').textContent = group.name;
+    node.querySelector('.k').textContent = group.collapsed ? String(count) : '';
+    node.title = group.name;
+    return node;
+  }
+
   function updateTab(node, tab) {
     node.classList.toggle('active', tab.id === state.active);
+    node.classList.toggle('pinned', !!tab.pinned);
+    const group = tab.group ? groupOf(tab.group) : null;
+    node.className = node.className.replace(/ ?gc[0-7]/g, '') + (group ? ' gc' + group.color : '');
+    node.classList.toggle('grouped', !!group);
+    node.hidden = !!(group && group.collapsed);
     // Steht der Tab neben dem aktiven im Fenster, sieht man ihm das an.
     node.classList.toggle('paired', !!tab.paired && tab.id !== state.active);
     const title = node.querySelector('.title');
@@ -129,20 +157,38 @@
 
   function renderTabs() {
     const seen = new Set();
-    state.tabs.forEach((tab, index) => {
+    const seenGroups = new Set();
+    // Die Leiste in ihrer Reihenfolge: vor dem ersten Tab jeder Gruppe ihr Kopf.
+    const order = [];
+    state.tabs.forEach((tab) => {
       let node = tabNodes.get(tab.id);
       if (!node) {
         node = makeTab(tab);
         tabNodes.set(tab.id, node);
       }
       updateTab(node, tab);
-      if (tabsBox.children[index] !== node) tabsBox.insertBefore(node, tabsBox.children[index] || null);
+      const group = tab.group ? groupOf(tab.group) : null;
+      if (group && !seenGroups.has(group.id)) {
+        seenGroups.add(group.id);
+        const count = state.tabs.filter((other) => other.group === group.id).length;
+        order.push(groupChip(group, count));
+      }
+      order.push(node);
       seen.add(tab.id);
+    });
+    order.forEach((node, index) => {
+      if (tabsBox.children[index] !== node) tabsBox.insertBefore(node, tabsBox.children[index] || null);
     });
     for (const [id, node] of tabNodes) {
       if (!seen.has(id)) {
         node.remove();
         tabNodes.delete(id);
+      }
+    }
+    for (const [id, node] of groupNodes) {
+      if (!seenGroups.has(id)) {
+        node.remove();
+        groupNodes.delete(id);
       }
     }
     measureTabs();
@@ -187,7 +233,7 @@
     if (event.target.closest('.x')) return;
     const id = Number(node.dataset.id);
     if (id !== state.active) post({ c: 'activateTab', id });
-    const nodes = Array.from(tabsBox.children);
+    const nodes = shownTabs();
     drag = {
       id,
       node,
@@ -210,7 +256,7 @@
     if (!drag.moved) {
       drag.moved = true;
       drag.node.classList.add('dragging');
-      Array.from(tabsBox.children).forEach((n) => n !== drag.node && n.classList.add('shifting'));
+      shownTabs().forEach((n) => n !== drag.node && n.classList.add('shifting'));
     }
     drag.node.style.transform = 'translateX(' + dx + 'px)';
     const center = drag.centers[drag.index] + dx;
@@ -220,7 +266,7 @@
       if (i > drag.index && center > c) target = Math.max(target, i);
     });
     drag.target = target;
-    Array.from(tabsBox.children).forEach((n, i) => {
+    shownTabs().forEach((n, i) => {
       if (n === drag.node) return;
       let shift = 0;
       if (target > drag.index && i > drag.index && i <= target) shift = -drag.width;
@@ -238,8 +284,22 @@
       n.classList.remove('dragging', 'shifting');
     });
     if (done.moved && done.target !== done.index) {
-      post({ c: 'moveTab', id: done.id, index: done.target });
+      // Wohin in der ganzen Liste: an die Stelle des Tabs, der dort gerade steht.
+      const at = shownTabs()[done.target];
+      const index = at ? state.tabs.findIndex((tab) => tab.id === Number(at.dataset.id)) : -1;
+      if (index >= 0) post({ c: 'moveTab', id: done.id, index });
     }
+  });
+
+  // Die Tabs, die gerade in der Leiste zu sehen sind (ohne Gruppenköpfe, ohne Zugeklapptes).
+  function shownTabs() {
+    return Array.from(tabsBox.children).filter((node) => node.classList.contains('tab') && !node.hidden);
+  }
+
+  // Gruppenkopf: Klick klappt zu oder auf, Rechtsklick öffnet das Menü der Gruppe.
+  tabsBox.addEventListener('click', (event) => {
+    const chip = event.target.closest('.gchip');
+    if (chip) post({ c: 'groupToggle', id: Number(chip.dataset.group) });
   });
 
   tabsBox.addEventListener('click', (event) => {
@@ -255,6 +315,12 @@
   });
 
   tabsBox.addEventListener('contextmenu', (event) => {
+    const chip = event.target.closest('.gchip');
+    if (chip) {
+      event.preventDefault();
+      openGroupMenu(Number(chip.dataset.group), event.clientX);
+      return;
+    }
     const node = event.target.closest('.tab');
     if (!node) return;
     event.preventDefault();
@@ -528,9 +594,11 @@
   });
   $('star').addEventListener('click', () => command('bookmark_page'));
   $('reader').addEventListener('click', () => command('reader'));
+  $('translate').addEventListener('click', () => command('translate_page'));
   $('mobile').addEventListener('click', () => command('mobile_view'));
   $('shield').addEventListener('click', () => (ui.menu === 'shield' ? closeMenu() : openShield()));
   $('ampel').addEventListener('click', () => (ui.menu === 'ampel' ? closeMenu() : openAmpel()));
+  $('sec').addEventListener('click', () => (ui.menu === 'check' ? closeMenu() : openCheck()));
   $('key').addEventListener('click', () => {
     closeEverything();
     post({ c: 'pwKey' });
@@ -632,11 +700,18 @@
 
     $('mobile').hidden = !next.mobile;
     renderAmpel(next.ampel);
+    renderCheck(next.check);
     renderShield(next.shield);
     renderSplitBar(next);
     const reader = $('reader');
     reader.hidden = !next.canRead;
     reader.classList.toggle('on', !!next.reader);
+    // Übersetzen: angeboten, wenn die Seite eine andere Sprache angibt – und
+    // solange sie übersetzt dasteht, führt derselbe Knopf zurück zum Original.
+    const translate = $('translate');
+    translate.hidden = !next.canTranslate;
+    translate.classList.toggle('on', !!next.translated);
+    translate.title = next.translated ? S.tip_translate_undo : S.tip_translate;
 
     if (ui.tabSearch) renderTabSearch();
 
@@ -726,6 +801,8 @@
     box.appendChild(menuItem(S.p_passwords, 'key', '', () => togglePanel('passwords')));
     sep();
     add('reader', S.m_reader, 'reader', '⌥⌘R');
+    add('translate_page', state && state.translated ? S.m_translate_undo : S.m_translate, 'translate', '⌥⌘T');
+    if (ui.check) box.appendChild(menuItem(S.m_site_check, 'lock', '⌥⌘S', openCheck));
     add('assistant', S.m_assistant, 'sparkle', '⌘J');
     add('assistant_summary', S.m_assistant_summary, 'list', '⇧⌘J');
     add('compare', S.m_compare, 'compare', '⌥⌘J');
@@ -781,6 +858,22 @@
     const tab = state ? state.tabs.find((entry) => entry.id === id) : null;
     if (tab && tab.paired) add(S.c_unsplit, 'compare', 'unsplit');
     else if (state && id !== state.active) add(S.c_split, 'compare', 'split');
+    box.appendChild(el('div', 'msep'));
+    // Anheften und Gruppen.
+    if (tab && tab.pinned) add(S.c_unpin, 'bookmark', 'unpin');
+    else add(S.c_pin, 'bookmark', 'pin');
+    if (tab && !tab.pinned) {
+      add(S.c_group_new, 'folder-plus', 'groupNew');
+      for (const group of (state && state.groups) || []) {
+        if (tab.group === group.id) continue;
+        box.appendChild(
+          menuItem(S.c_group_add.replace('{name}', group.name), 'folder', null, () =>
+            post({ c: 'tabMenu', id, action: 'groupAdd', group: group.id })
+          )
+        );
+      }
+      if (tab.group) add(S.c_group_leave, 'minus', 'groupLeave');
+    }
     box.appendChild(el('div', 'msep'));
     add(S.c_close, 'close', 'close');
     add(S.c_close_others, 'close', 'closeOthers');
@@ -901,6 +994,91 @@
     syncOverlay();
   }
 
+  // ------------------------------------------------------------------------
+  // Security-Ampel: der Seitencheck. Links in der Adresszeile steht, wie die
+  // gezeigte Seite dasteht; ein Klick zeigt, wo sie angreifbar wäre. Die Texte
+  // kommen fertig vom Browser – hier werden sie nur als Text eingesetzt.
+  // ------------------------------------------------------------------------
+
+  function renderCheck(check) {
+    ui.check = check || null;
+    const button = $('sec');
+    button.hidden = !check;
+    // Die Ampel sagt mehr als das Schloss – sie steht dann an seiner Stelle.
+    $('security').hidden = !!check;
+    if (!check) {
+      if (ui.menu === 'check') closeMenu();
+      return;
+    }
+    button.className = 'lvl' + check.level;
+    button.title = S['sc_tip_' + check.level];
+    $('sec-n').textContent = check.count ? String(check.count) : '';
+    if (ui.menu === 'check') fillCheck();
+  }
+
+  function fillCheck() {
+    const check = ui.check;
+    if (!check) return;
+    const box = $('popup');
+    const scroll = box.scrollTop;
+    box.textContent = '';
+    box.classList.add('ampelbox');
+
+    const head = el('div', 'amh lvl' + check.level);
+    const lights = el('div', 'lights');
+    for (const name of ['r', 'y', 'g']) lights.appendChild(el('i', name));
+    head.appendChild(lights);
+    const words = el('div', 'txt');
+    const unsure = check.partial && !check.count;
+    words.appendChild(el('div', 't', unsure ? S.sc_title_partial : S['sc_title_' + check.level]));
+    const sub = check.count
+      ? S.sc_sub.replace('{site}', check.site).replace('{a}', check.serious).replace('{b}', check.count - check.serious)
+      : unsure
+        ? check.site
+        : S.sc_sub_ok.replace('{site}', check.site);
+    words.appendChild(el('div', 'h', sub));
+    head.appendChild(words);
+    box.appendChild(head);
+
+    const items = check.items || [];
+    const section = (title, list, compact) => {
+      if (!list.length) return;
+      box.appendChild(el('div', 'amsub', title));
+      for (const item of list) {
+        const row = el('div', 'scf' + (compact ? ' ok' : ''));
+        row.appendChild(el('i', 'dot lvl' + (item.l > 2 ? 2 : item.l === 2 ? 'x' : item.l)));
+        const text = el('div', 'txt');
+        text.appendChild(el('span', 'l', item.t));
+        if (item.d && !compact) text.appendChild(el('span', 'n', item.d));
+        row.appendChild(text);
+        box.appendChild(row);
+      }
+    };
+    section(S.sc_head_open, items.filter((item) => item.l <= 1), false);
+    section(S.sc_head_hints, items.filter((item) => item.l === 2), false);
+    section(S.sc_head_good, items.filter((item) => item.l === 3), true);
+    box.appendChild(el('div', 'amnote', S.sc_note));
+    box.scrollTop = scroll;
+  }
+
+  function openCheck() {
+    if (!ui.check) return;
+    // Die Seite kann sich seit dem Laden geändert haben: noch einmal ansehen.
+    post({ c: 'checkRefresh' });
+    fillCheck();
+    const box = $('popup');
+    const place = $('sec').getBoundingClientRect();
+    box.style.top = Math.round(place.bottom + 8) + 'px';
+    box.style.left = Math.max(8, Math.min(place.left - 6, window.innerWidth - 368)) + 'px';
+    box.style.right = 'auto';
+    box.scrollTop = 0;
+    box.hidden = false;
+    ui.menu = 'check';
+    closePanel();
+    closeTabSearch();
+    syncOverlay();
+  }
+
   // Das Schild in der Adresszeile: wie viel auf dieser Seite gesperrt wurde –
   // und der Schalter, falls eine Website mit dem Blocker nicht zurechtkommt.
   function renderShield(shield) {
@@ -951,7 +1129,7 @@
     toggle.type = 'button';
     toggle.addEventListener('click', () => {
       closeMenu();
-      post({ c: 'blockerSite', off: !info.off });
+      post({ c: 'blockerSite', off: !info.off, site: info.site || '' });
     });
     row.appendChild(toggle);
     box.appendChild(row);
@@ -970,6 +1148,13 @@
     closePanel();
     closeTabSearch();
     syncOverlay();
+  }
+
+  // Wie viele gemeldete Adressen gerade gesperrt sind – als Zusatz zum Hinweis.
+  function guardNote(info) {
+    if (!info) return '';
+    if (info.guardRules) return ' ' + S.s_guard_state.replace('{n}', info.guardRules.toLocaleString());
+    return info.guardBusy ? ' ' + S.s_guard_loading : '';
   }
 
   // Einstellungen: Was der Werbeblocker gerade an Listen hat.
@@ -1015,6 +1200,58 @@
     return row;
   }
 
+  // Menü einer Tab-Gruppe: Name, Farbe, auflösen, schließen.
+  function openGroupMenu(id, x) {
+    const group = groupOf(id);
+    if (!group) return;
+    const box = $('popup');
+    box.textContent = '';
+    const line = el('div', 'gname');
+    const field = document.createElement('input');
+    field.type = 'text';
+    field.value = group.name;
+    field.maxLength = 40;
+    field.spellcheck = false;
+    const rename = () => {
+      const name = field.value.trim();
+      if (name && name !== group.name) post({ c: 'groupName', id, name });
+    };
+    field.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        rename();
+        closeMenu();
+      }
+      event.stopPropagation();
+    });
+    field.addEventListener('blur', rename);
+    line.appendChild(field);
+    box.appendChild(line);
+    const colors = el('div', 'gcolors');
+    for (let color = 0; color < 8; color++) {
+      const dot = el('button', 'gc' + color + (color === group.color ? ' on' : ''));
+      dot.type = 'button';
+      dot.addEventListener('click', () => {
+        post({ c: 'groupColor', id, color });
+        closeMenu();
+      });
+      colors.appendChild(dot);
+    }
+    box.appendChild(colors);
+    box.appendChild(el('div', 'msep'));
+    box.appendChild(menuItem(group.collapsed ? S.tg_open : S.tg_close, 'chevron-down', null, () => post({ c: 'groupToggle', id })));
+    box.appendChild(menuItem(S.tg_dissolve, 'minus', null, () => post({ c: 'groupDissolve', id })));
+    box.appendChild(menuItem(S.tg_close_tabs, 'close', null, () => post({ c: 'groupClose', id })));
+    box.style.top = reportedHeight - 38 + 'px';
+    box.style.left = Math.max(8, Math.min(x - 20, window.innerWidth - 270)) + 'px';
+    box.style.right = 'auto';
+    box.hidden = false;
+    ui.menu = 'group';
+    closePanel();
+    closeTabSearch();
+    syncOverlay();
+    setTimeout(() => field.select(), 30);
+  }
+
   function closeMenu() {
     if (!ui.menu) return;
     ui.menu = null;
@@ -1033,6 +1270,7 @@
     downloads: S.p_downloads,
     settings: S.p_settings,
     passwords: S.p_passwords,
+    sitedata: S.p_sitedata,
   };
 
   function togglePanel(name) {
@@ -1049,12 +1287,18 @@
     ui.lastPanel = null;
     ui.panelOptions = options || {};
     $('panel-title').textContent = PANEL_TITLE[name] || '';
-    const searchable = name === 'history' || name === 'bookmarks' || name === 'passwords';
+    const searchable = name === 'history' || name === 'bookmarks' || name === 'passwords' || name === 'sitedata';
     $('panel-search').hidden = !searchable;
     const query = $('panel-query');
     query.value = '';
     query.placeholder =
-      name === 'history' ? S.p_search_history : name === 'passwords' ? S.p_search_passwords : S.p_search_bookmarks;
+      name === 'history'
+        ? S.p_search_history
+        : name === 'passwords'
+          ? S.p_search_passwords
+          : name === 'sitedata'
+            ? S.p_search_sitedata
+            : S.p_search_bookmarks;
     const extra = $('panel-extra');
     extra.hidden = name !== 'downloads';
     extra.textContent = S.p_clear_downloads;
@@ -1158,7 +1402,29 @@
     const data = message.data || {};
     const items = data.items || [];
 
-    if (message.name === 'history') {
+    if (message.name === 'sitedata') {
+      // Was Websites auf diesem Mac abgelegt haben – einzeln oder ganz zu löschen.
+      body.appendChild(el('div', 'setnote', S.sd_note));
+      if (!items.length) body.appendChild(el('div', 'empty', ui.panelQuery ? S.p_no_results : S.sd_empty));
+      const KIND = { cookies: S.sd_cookies, storage: S.sd_storage, cache: S.sd_cache };
+      for (const item of items) {
+        const row = el('div', 'row');
+        row.appendChild(icon('globe'));
+        const text = el('div', 'txt');
+        text.appendChild(el('div', 't', item.site));
+        text.appendChild(el('div', 's', (item.kinds || []).map((kind) => KIND[kind] || kind).join(' · ')));
+        row.appendChild(text);
+        row.appendChild(
+          actionButton('trash', S.sd_delete, () => post({ c: 'siteDataDelete', site: item.site, q: ui.panelQuery || '' }))
+        );
+        body.appendChild(row);
+      }
+      if (items.length && !ui.panelQuery) {
+        const tools = el('div', 'setbtns');
+        tools.appendChild(textButton(S.sd_delete_all.replace('{n}', String(data.total || items.length)), 'danger', () => post({ c: 'siteDataDelete', site: '', q: '' })));
+        body.appendChild(tools);
+      }
+    } else if (message.name === 'history') {
       if (!items.length) body.appendChild(el('div', 'empty', ui.panelQuery ? S.p_no_results : S.p_empty_history));
       let lastDay = null;
       for (const item of items) {
@@ -1571,6 +1837,7 @@
         body.appendChild(sites);
       }
     }
+    body.appendChild(switchRow(S.s_guard, S.s_guard_hint + guardNote(data.filters), 'guard', data.guard));
     body.appendChild(switchRow(S.s_tracking, S.s_tracking_hint, 'strip_tracking', data.stripTracking));
     body.appendChild(switchRow(S.s_lookalike, S.s_lookalike_hint, 'lookalike', data.lookalike));
     body.appendChild(switchRow(S.s_local_net, S.s_local_net_hint, 'local_net', data.localNet));
@@ -1593,6 +1860,16 @@
     body.appendChild(switchRow(S.s_hardened, S.s_hardened_hint, 'hardened', data.hardened));
     body.appendChild(switchRow(S.s_devtools, S.s_devtools_hint, 'devtools', data.devtools));
     body.appendChild(switchRow(S.s_clear_on_quit, S.s_clear_on_quit_hint, 'clear_on_quit', data.clearOnQuit));
+    {
+      // Cookies und andere Website-Daten je Website ansehen und löschen.
+      const row = el('div', 'set');
+      const text = el('div', 'txt');
+      text.appendChild(el('div', '', S.s_sitedata));
+      text.appendChild(el('div', 'h', S.s_sitedata_hint));
+      row.appendChild(text);
+      row.appendChild(textButton(S.s_sitedata_open, '', () => openPanel('sitedata')));
+      body.appendChild(row);
+    }
     body.appendChild(el('div', 'setnote', S.s_always));
 
     if ((data.wallpapers || []).length) {
@@ -2034,18 +2311,67 @@
   // Hinweise
   // ------------------------------------------------------------------------
 
+  // Eine Warnung räumt ihren Platz nicht für einen gewöhnlichen Hinweis – und
+  // in ihren ersten Sekunden für gar nichts. Sonst könnte eine Seite sie mit
+  // einem selbst ausgelösten Hinweis (Download, anderes Programm) überdecken,
+  // kaum dass sie dasteht. Was währenddessen kommt, wartet.
+  const NOTICE_HOLD = 6000;
+  const waitingNotices = [];
+
+  function warningStands() {
+    return ui.noticeId != null && ui.noticeWarn && !$('notice').hidden;
+  }
+
+  function nextNotice() {
+    clearTimeout(ui.noticeHoldTimer);
+    if (!waitingNotices.length) return;
+    // Erst was stehen bleiben muss, dann Warnungen, dann der Rest.
+    let index = waitingNotices.findIndex((message) => message.keep);
+    if (index < 0) index = waitingNotices.findIndex((message) => message.warn);
+    const message = waitingNotices[Math.max(index, 0)];
+    const held = warningStands() && (!message.warn || performance.now() - ui.noticeAt < NOTICE_HOLD);
+    if (held) return;
+    waitingNotices.splice(Math.max(index, 0), 1);
+    displayNotice(message);
+  }
+
   function hideNotice() {
     clearTimeout(ui.noticeTimer);
     if (ui.noticeId != null) post({ c: 'noticeGone', id: ui.noticeId });
     ui.noticeId = null;
+    ui.noticeWarn = false;
     $('notice').hidden = true;
     reportHeight();
+    // Was gewartet hat, kommt jetzt dran.
+    if (waitingNotices.length) setTimeout(nextNotice, 0);
   }
 
   function showNotice(message) {
+    const age = performance.now() - (ui.noticeAt || 0);
+    if (warningStands() && (!message.warn || age < NOTICE_HOLD)) {
+      waitingNotices.push(message);
+      // Mehr als vier warten nicht: Der älteste gewöhnliche fällt weg, sonst der neue.
+      if (waitingNotices.length > 4) {
+        let drop = waitingNotices.findIndex((waiting) => !waiting.warn);
+        if (drop < 0) drop = waitingNotices.findIndex((waiting) => !waiting.keep);
+        if (drop < 0) drop = waitingNotices.length - 1;
+        post({ c: 'noticeGone', id: waitingNotices.splice(drop, 1)[0].id });
+      }
+      // Eine wartende Warnung kommt dran, sobald die erste lange genug stand.
+      if (message.warn && age < NOTICE_HOLD) {
+        clearTimeout(ui.noticeHoldTimer);
+        ui.noticeHoldTimer = setTimeout(nextNotice, NOTICE_HOLD - age + 30);
+      }
+      return;
+    }
+    displayNotice(message);
+  }
+
+  function displayNotice(message) {
     if (ui.noticeId != null) post({ c: 'noticeGone', id: ui.noticeId });
     clearTimeout(ui.noticeTimer);
     ui.noticeId = message.id;
+    ui.noticeWarn = !!message.warn;
     ui.noticeAt = performance.now();
     $('notice').classList.toggle('warn', !!message.warn);
     setUse('notice-icon', message.warn ? 'warning' : 'info');
@@ -2191,6 +2517,7 @@
         openFind();
       }
     } else if (what === 'clearData') openPanel('settings', { confirmClear: true });
+    else if (what === 'siteCheck') ui.menu === 'check' ? closeMenu() : openCheck();
     else if (what === 'tab_search') ui.tabSearch ? closeTabSearch() : openTabSearch();
     else if (what === 'tab_overview') ui.overview ? closeOverview() : openOverview();
     else if (PANEL_TITLE[what]) togglePanel(what);
@@ -2256,6 +2583,22 @@
       case 'notice':
         showNotice(message);
         break;
+      case 'noticeText': {
+        // Ein Hinweis, der noch dasteht, bekommt neuen Text (Fortschritt).
+        if (ui.noticeId === message.id && !$('notice').hidden) {
+          $('notice-text').textContent = message.text;
+          $('notice-text').title = message.text;
+        }
+        const waiting = waitingNotices.find((entry) => entry.id === message.id);
+        if (waiting) waiting.text = message.text;
+        break;
+      }
+      case 'noticeHide': {
+        if (ui.noticeId === message.id) hideNotice();
+        const index = waitingNotices.findIndex((entry) => entry.id === message.id);
+        if (index >= 0) waitingNotices.splice(index, 1);
+        break;
+      }
       case 'pwSecret':
         onSecret(message);
         break;

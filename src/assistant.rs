@@ -59,10 +59,20 @@ fn engine_id(engine: &Engine) -> &'static str {
         Engine::Device => "device",
         Engine::Ollama(_) => "ollama",
         Engine::Claude(_) => "claude",
+        Engine::Other(_) => "other",
     }
 }
 
-fn engine_label(engine: &Engine) -> String {
+/// Dienste, die sich mit einem Klick eintragen lassen (Kennung, Name, Adresse).
+const SERVICES: &[(&str, &str, &str)] = &[
+    ("lmstudio", "LM Studio", "http://localhost:1234/v1"),
+    ("llamacpp", "llama.cpp", "http://localhost:8080/v1"),
+    ("openai", "OpenAI", "https://api.openai.com/v1"),
+    ("openrouter", "OpenRouter", ai::OPENROUTER_BASE),
+    ("mistral", "Mistral", "https://api.mistral.ai/v1"),
+];
+
+pub(crate) fn engine_label(engine: &Engine) -> String {
     match engine {
         Engine::Device => t("ai_e_device_label").to_string(),
         Engine::Ollama(model) => format!("Ollama · {model}"),
@@ -71,6 +81,10 @@ fn engine_label(engine: &Engine) -> String {
             .find(|(id, _)| id == model)
             .map(|(_, name)| name.to_string())
             .unwrap_or_else(|| model.clone()),
+        Engine::Other(service) => {
+            let host = ai::service_base(&service.base).map(|url| url.host).unwrap_or_default();
+            format!("{host} · {}", service.model)
+        }
     }
 }
 
@@ -259,6 +273,18 @@ impl App {
                 self.ai_cancel_all();
                 self.assistant_state_all();
             }
+            "aiOtherKey" => self.ai_other_key(window, &text("key"), &text("url")),
+            "aiOtherKeyDelete" => {
+                self.ai_other_forget_key();
+                self.ai_other_status.clear();
+                self.ai_cancel_all();
+                self.assistant_state_all();
+            }
+            "aiOtherCheck" => {
+                self.ai_other_check();
+                self.assistant_state_all();
+            }
+            "aiOAuthStart" => self.ai_oauth_start(window),
             _ => {}
         }
     }
@@ -365,6 +391,18 @@ impl App {
         for (window, message) in std::mem::take(&mut self.ai_deferred) {
             self.ai_ask(window, &message);
         }
+        // Seiten, deren Übersetzung darauf gewartet hat – sofern sie noch vorn
+        // stehen und der Tab noch dieselbe Seite zeigt wie beim Auftrag.
+        for (window, tab, url) in std::mem::take(&mut self.translate_deferred) {
+            let same = self
+                .windows
+                .get(&window)
+                .and_then(|win| win.active_tab())
+                .is_some_and(|active| active.id == tab && crate::translate::page_of(&active.url) == url);
+            if same {
+                self.translate_page(window);
+            }
+        }
     }
 
     fn ai_choice(&self) -> String {
@@ -396,8 +434,226 @@ impl App {
         }
     }
 
+    // --- Anderer Dienst ------------------------------------------------------
+
+    fn ai_other_url(&self) -> Option<ai::ServiceUrl> {
+        self.store.setting("ai_other_url").and_then(|url| ai::service_base(&url))
+    }
+
+    /// Gibt es einen Schlüssel – und gehört er zu genau diesem Dienst? „Genau
+    /// dieser“ heißt: dieselbe Basisadresse, nicht bloß derselbe Rechner – ein
+    /// anderer Port oder Pfad kann ein anderer Betreiber sein.
+    fn ai_other_keyed(&self, url: &ai::ServiceUrl) -> bool {
+        self.store.setting("ai_other_key").as_deref() == Some("1")
+            && self.store.setting("ai_other_key_base").as_deref() == Some(url.base.as_str())
+    }
+
+    /// Vergisst den hinterlegten Schlüssel – samt dem Vermerk, wem er gehört.
+    fn ai_other_forget_key(&mut self) {
+        if let Some(owner) = self.store.setting("ai_other_key_base").filter(|base| !base.is_empty()) {
+            ai::delete_other_key(&owner);
+        }
+        self.store.set_setting("ai_other_key", "0");
+        self.store.set_setting("ai_other_key_base", "");
+        self.store.set_setting("ai_other_key_host", "");
+    }
+
+    fn ai_other_model(&self) -> String {
+        self.store.setting("ai_other_model").filter(|model| ai::model_name_ok(model)).unwrap_or_default()
+    }
+
+    fn ai_other_models(&self) -> Vec<String> {
+        self.store
+            .setting("ai_other_models")
+            .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+            .unwrap_or_default()
+    }
+
+    /// Der eingetragene Dienst, sofern alles Nötige da ist: Adresse, Modell
+    /// und – außer auf diesem Mac – ein Schlüssel.
+    fn ai_other_service(&self) -> Option<ai::Service> {
+        let url = self.ai_other_url()?;
+        let model = self.ai_other_model();
+        let keyed = self.ai_other_keyed(&url);
+        (!model.is_empty() && (url.local || keyed)).then(|| ai::Service { base: url.base, model, local: url.local, keyed })
+    }
+
+    /// Trägt einen Dienst ein. Wechselt dabei der Rechner, gelten weder das
+    /// alte Modell noch der alte Schlüssel weiter – ein Schlüssel geht nie an
+    /// einen anderen Dienst als den, für den er eingetragen wurde.
+    fn ai_other_set_url(&mut self, input: &str) -> bool {
+        let Some(url) = ai::service_base(input) else {
+            return false;
+        };
+        let before = self.ai_other_url();
+        if self.ai_other_status == "badurl" {
+            self.ai_other_status.clear();
+        }
+        if before.as_ref().map(|old| old.base.as_str()) != Some(url.base.as_str()) {
+            self.store.set_setting("ai_other_models", "[]");
+            self.store.set_setting("ai_other_model", "");
+            self.ai_other_status.clear();
+        }
+        if self.store.setting("ai_other_key").as_deref() == Some("1") && !self.ai_other_keyed(&url) {
+            self.ai_other_forget_key();
+        }
+        self.store.set_setting("ai_other_url", &url.base);
+        true
+    }
+
+    /// Fragt den Dienst im Hintergrund, welche Modelle er anbietet.
+    fn ai_other_check(&mut self) {
+        let Some(url) = self.ai_other_url() else {
+            return;
+        };
+        let keyed = self.ai_other_keyed(&url);
+        if !url.local && !keyed {
+            self.ai_other_status.clear();
+            return;
+        }
+        self.ai_other_status = "checking".to_string();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let result = ai::other_models_for(&url, keyed);
+            let _ = proxy.send_event(UserEvent::AiOther(ai::OtherEvent::Models { base: url.base, result }));
+        });
+    }
+
+    pub fn ai_other_event(&mut self, event: ai::OtherEvent) {
+        match event {
+            ai::OtherEvent::Models { base, result } => {
+                // Inzwischen ein anderer Dienst eingetragen? Dann ist die Antwort überholt.
+                let Some(url) = self.ai_other_url().filter(|url| url.base == base) else {
+                    return;
+                };
+                match result {
+                    Ok(models) => {
+                        self.ai_other_status = "ok".to_string();
+                        // Auf diesem Mac kostet die Wahl nichts: das erste Modell nehmen,
+                        // wenn noch keines gewählt ist. Im Netz wählt der Mensch.
+                        if url.local && self.ai_other_model().is_empty() {
+                            if let Some(first) = models.first() {
+                                self.store.set_setting("ai_other_model", first);
+                            }
+                        }
+                        self.store.set_setting("ai_other_models", &serde_json::to_string(&models).unwrap_or_default());
+                    }
+                    Err(401) | Err(403) => self.ai_other_status = "denied".to_string(),
+                    Err(0) => self.ai_other_status = "off".to_string(),
+                    // Manche Dienste haben keine Modell-Liste – nutzbar sind sie trotzdem.
+                    Err(_) => self.ai_other_status = "error".to_string(),
+                }
+                self.assistant_state_all();
+            }
+            ai::OtherEvent::Key(result) => {
+                let window = self.focused();
+                match result {
+                    Ok(key) => {
+                        // Erst der Dienst, dann sein Schlüssel – unter genau dessen Adresse.
+                        self.ai_other_set_url(&ai::openrouter_base());
+                        let saved = self.ai_other_url().filter(|url| ai::save_other_key(&url.base, &key).is_ok());
+                        let Some(url) = saved else {
+                            if let Some(window) = window {
+                                self.warn(window, t("ai_oauth_failed").to_string(), 9000);
+                            }
+                            return;
+                        };
+                        self.store.set_setting("ai_other_key", "1");
+                        self.store.set_setting("ai_other_key_base", &url.base);
+                        self.store.set_setting("ai_engine", "other");
+                        // Was noch mit dem alten Stand läuft, hört auf.
+                        self.ai_cancel_all();
+                        self.ai_other_check();
+                        if let Some(window) = window {
+                            self.notice(window, t("ai_oauth_ok").to_string(), None, 9000);
+                        }
+                    }
+                    Err(text) => {
+                        if let Some(window) = window {
+                            self.warn(window, text, 9000);
+                        }
+                    }
+                }
+                self.assistant_state_all();
+            }
+        }
+    }
+
+    /// Beginnt die Anmeldung bei OpenRouter: Die Zustimmung gibt der Mensch
+    /// dort selbst, in einem gewöhnlichen Tab. Zunder bekommt danach einen
+    /// eigenen Schlüssel für sein Konto – das Passwort sieht es nie.
+    fn ai_oauth_start(&mut self, window: WindowId) {
+        // Nicht aus einem privaten oder einem Stealth-Fenster: Der Tausch des
+        // Codes gegen den Schlüssel ginge am Tunnel vorbei, und ein solches
+        // Fenster richtet im Profil nichts ein.
+        if self.windows.get(&window).is_none_or(|win| win.private || win.stealth) {
+            return;
+        }
+        let Some(verifier) = ai::oauth_verifier() else {
+            return;
+        };
+        self.ai_cancel_all();
+        self.ai_other_set_url(&ai::openrouter_base());
+        let Some(index) = self.new_tab(window, Some(ai::oauth_url(&verifier)), true, None) else {
+            return;
+        };
+        let Some(tab) = self.windows.get(&window).and_then(|w| w.tabs.get(index)).map(|t| t.id) else {
+            return;
+        };
+        self.oauth = Some(crate::app::OAuthFlow { verifier, at: Instant::now(), tab });
+        native::expect_oauth(true);
+        self.assistant_state_all();
+    }
+
+    /// Der Tab der Anmeldung ist bei der Rücksprung-Adresse angekommen
+    /// (abgefangen in `native::nav_policy`): Code herausnehmen und einlösen.
+    pub fn oauth_returned(&mut self, window: WindowId, index: usize, url: &str) {
+        let Some(started) = self.oauth.as_ref() else {
+            return;
+        };
+        let here = self.windows.get(&window).and_then(|w| w.tabs.get(index));
+        let tab = here.map(|t| t.id);
+        // Ein anderer Tab steuert die Rücksprung-Adresse an: Das ist nicht die
+        // Anmeldung. Sein Abruf ist schon abgebrochen – die Anmeldung läuft weiter.
+        if tab != Some(started.tab) {
+            return;
+        }
+        // Der Rücksprung muss von der Seite kommen, auf der man zustimmt. Hat
+        // der Tab inzwischen eine andere Website gezeigt, könnte die einen Code
+        // für ein fremdes Konto unterschieben.
+        let from_provider = here.is_some_and(|t| crate::shield::host_of(&t.url) == ai::oauth_host());
+        let Some(flow) = self.oauth.take() else {
+            return;
+        };
+        native::expect_oauth(false);
+        let code = url::Url::parse(url)
+            .ok()
+            .and_then(|parsed| parsed.query_pairs().find(|(key, _)| key == "code").map(|(_, value)| value.into_owned()))
+            .filter(|code| (4..=512).contains(&code.len()) && code.chars().all(|c| c.is_ascii_graphic()));
+        // Nur der Tab, in dem die Anmeldung begann, und nur binnen zehn Minuten.
+        let fresh = flow.at.elapsed() < Duration::from_secs(600) && from_provider;
+        let (Some(code), true) = (code, fresh) else {
+            self.warn(window, t("ai_oauth_failed").to_string(), 9000);
+            self.assistant_state_all();
+            return;
+        };
+        // Der Tab hat seinen Dienst getan.
+        if self.windows.get(&window).is_some_and(|w| w.tabs.len() > 1) {
+            self.close_tab(window, index);
+        } else {
+            self.navigate(window, index, crate::omnibox::NEWTAB, false);
+        }
+        let proxy = self.proxy.clone();
+        let german = i18n::lang() == Lang::De;
+        std::thread::spawn(move || {
+            let result = ai::oauth_exchange(&code, &flow.verifier, german);
+            let _ = proxy.send_event(UserEvent::AiOther(ai::OtherEvent::Key(result)));
+        });
+        self.assistant_state_all();
+    }
+
     /// Welches Modell eine Anfrage aus einem Fenster bekommt.
-    fn ai_engine(&self, private: bool) -> Option<Engine> {
+    pub(crate) fn ai_engine(&self, private: bool) -> Option<Engine> {
         let device = self.ai_probe.as_ref().is_some_and(|p| p.device);
         let ollama = self.ai_ollama_model();
         match self.ai_choice().as_str() {
@@ -407,6 +663,12 @@ impl App {
             "ollama" => {
                 if let Some(model) = &ollama {
                     return Some(Engine::Ollama(model.clone()));
+                }
+            }
+            // Ein Dienst im Netz nie aus einem privaten Fenster.
+            "other" => {
+                if let Some(service) = self.ai_other_service().filter(|service| service.local || !private) {
+                    return Some(Engine::Other(service));
                 }
             }
             _ => {}
@@ -424,6 +686,7 @@ impl App {
         };
         let probe = self.ai_probe.as_ref();
         let engine = self.ai_engine(private);
+        let other_url = self.ai_other_url();
         let models = probe.and_then(|p| p.ollama.clone());
         let state = json!({
             "t": "aiState",
@@ -433,6 +696,11 @@ impl App {
                 "id": engine_id(e),
                 "label": engine_label(e),
                 "local": e.is_local(),
+                // Wohin der Seitentext geht, wenn nicht zu Anthropic.
+                "host": match e {
+                    Engine::Other(service) => ai::service_base(&service.base).map(|url| url.host),
+                    _ => None,
+                },
             })),
             "device": {
                 "ok": probe.is_some_and(|p| p.device),
@@ -450,6 +718,27 @@ impl App {
                     .iter()
                     .map(|(id, name)| json!({ "id": id, "name": name }))
                     .collect::<Vec<_>>(),
+            },
+            "other": {
+                "url": other_url.as_ref().map(|url| url.base.clone()).unwrap_or_default(),
+                "host": other_url.as_ref().map(|url| url.host.clone()).unwrap_or_default(),
+                "local": other_url.as_ref().is_some_and(|url| url.local),
+                "key": other_url.as_ref().is_some_and(|url| self.ai_other_keyed(url)),
+                "model": self.ai_other_model(),
+                "models": self.ai_other_models(),
+                "usable": self.ai_other_service().is_some(),
+                "status": self.ai_other_status,
+                "service": other_url
+                    .as_ref()
+                    .and_then(|url| SERVICES.iter().find(|(_, _, base)| *base == url.base))
+                    .map(|(id, _, _)| *id)
+                    .unwrap_or(if other_url.is_some() { "custom" } else { "" }),
+                "services": SERVICES
+                    .iter()
+                    .map(|(id, name, base)| json!({ "id": id, "name": name, "local": base.starts_with("http://") }))
+                    .collect::<Vec<_>>(),
+                "openrouter": other_url.as_ref().is_some_and(|url| url.base == ai::openrouter_base()),
+                "signingIn": self.oauth.as_ref().is_some_and(|flow| flow.at.elapsed() < Duration::from_secs(600)),
             },
             "private": private,
         });
@@ -472,8 +761,32 @@ impl App {
 
     fn ai_setting(&mut self, key: &str, value: &str) {
         match key {
-            "engine" if matches!(value, "device" | "ollama" | "claude") => {
+            "engine" if matches!(value, "device" | "ollama" | "claude" | "other") => {
                 self.store.set_setting("ai_engine", value);
+            }
+            // Einen der bekannten Dienste eintragen – oder eine eigene Adresse.
+            "otherService" => {
+                let Some((_, _, base)) = SERVICES.iter().find(|(id, _, _)| *id == value) else {
+                    return;
+                };
+                self.ai_other_set_url(base);
+                self.ai_other_check();
+            }
+            "otherUrl" => {
+                if !self.ai_other_set_url(value) {
+                    // Sagen, warum nichts passiert ist.
+                    self.ai_other_status = "badurl".to_string();
+                    self.assistant_state_all();
+                    return;
+                }
+                self.ai_other_check();
+            }
+            "otherModel" if ai::model_name_ok(value) => {
+                self.store.set_setting("ai_other_model", value);
+                // Wer ein Modell wählt, will den Dienst benutzen.
+                if self.ai_other_service().is_some() {
+                    self.store.set_setting("ai_engine", "other");
+                }
             }
             "ollamaModel" => {
                 let known = self
@@ -500,6 +813,8 @@ impl App {
     /// weiterlaufen.
     fn ai_cancel_all(&mut self) {
         self.ai_deferred.clear();
+        // Auch das Übersetzen: Es liefe sonst mit dem alten Dienst weiter.
+        self.translate_cancel_all();
         for win in self.windows.values_mut() {
             if let Some(job) = win.ai_job.take() {
                 job.cancel.store(true, Ordering::Relaxed);
@@ -529,9 +844,45 @@ impl App {
         self.store.set_setting("ai_claude_key", "1");
         // Wer einen Schlüssel einträgt, will Claude benutzen.
         self.store.set_setting("ai_engine", "claude");
+        self.ai_cancel_all();
         if let Some(win) = self.windows.get_mut(&window) {
             win.assistant_send(json!({ "t": "aiKeyResult", "ok": true }));
         }
+        self.assistant_state_all();
+    }
+
+    /// Sichert den Schlüssel für den eingetragenen Dienst im Schlüsselbund –
+    /// zusammen mit dem Vermerk, zu welchem Rechner er gehört.
+    /// `intended`: die Adresse, die die Oberfläche beim Sichern gezeigt hat.
+    /// Stimmt sie nicht mit der eingetragenen überein (die Adresse wurde
+    /// geändert, aber nicht übernommen), wird nichts gesichert – der Schlüssel
+    /// ginge sonst an den Dienst von vorher.
+    fn ai_other_key(&mut self, window: WindowId, key: &str, intended: &str) {
+        let key = key.trim();
+        let url = self.ai_other_url();
+        let plausible = (8..=400).contains(&key.len()) && key.chars().all(|c| c.is_ascii_graphic());
+        let error = match &url {
+            None => Some("ai_r_other_url"),
+            Some(url) if url.base != intended => Some("ai_key_other_url"),
+            Some(_) if !plausible => Some("ai_key_invalid"),
+            Some(url) if ai::save_other_key(&url.base, key).is_err() => Some("ai_key_error"),
+            Some(_) => None,
+        };
+        if let Some(error) = error {
+            if let Some(win) = self.windows.get_mut(&window) {
+                win.assistant_send(json!({ "t": "aiKeyResult", "ok": false, "text": t(error), "other": true }));
+            }
+            return;
+        }
+        if let Some(url) = url {
+            self.store.set_setting("ai_other_key", "1");
+            self.store.set_setting("ai_other_key_base", &url.base);
+        }
+        self.ai_cancel_all();
+        if let Some(win) = self.windows.get_mut(&window) {
+            win.assistant_send(json!({ "t": "aiKeyResult", "ok": true, "other": true }));
+        }
+        self.ai_other_check();
         self.assistant_state_all();
     }
 
@@ -823,6 +1174,12 @@ impl App {
             if let Some(job) = win.ai_job.take() {
                 job.cancel.store(true, Ordering::Relaxed);
             }
+        }
+        // War das der Tab der Anmeldung bei OpenRouter, ist sie damit beendet.
+        if self.oauth.as_ref().is_some_and(|flow| flow.tab == tab) {
+            self.oauth = None;
+            native::expect_oauth(false);
+            self.assistant_state_all();
         }
     }
 }

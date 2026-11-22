@@ -63,6 +63,8 @@
   let running = null; // { tab, answer, job }
   let keyDraft = ''; // angefangene Eingabe im Schlüsselfeld
   let keyError = '';
+  // Dasselbe für den „anderen Dienst“ – dazu Adresse und Modellname, solange sie getippt werden.
+  const other = { keyDraft: '', keyError: '', urlDraft: null, modelDraft: null, custom: false };
   let tabList = []; // die anderen Tabs des Fensters, für die Auswahl zum Vergleichen
   const pick = { chosen: new Set(), split: true, focus: '' };
 
@@ -503,7 +505,8 @@
         text = models.engine.label + ' · ' + S.ai_local;
         symbol = 'lock';
       } else {
-        text = models.engine.label + ' · ' + S.ai_cloud;
+        const host = models.engine.host;
+        text = models.engine.label + ' · ' + (host ? S.ai_cloud_host.replace('{host}', host) : S.ai_cloud);
         symbol = 'globe';
         kind = 'cloud';
       }
@@ -756,15 +759,195 @@
     extra.appendChild(el('div', 'small', S.ai_fallback_hint));
     claudeBox.appendChild(extra);
     list.appendChild(claudeBox);
+
+    list.appendChild(renderOther());
+  }
+
+  // Ein anderer Dienst mit der verbreiteten Chat-Schnittstelle: auf diesem Mac
+  // (LM Studio, llama.cpp) oder im Netz (OpenAI, OpenRouter, Mistral, eigene Adresse).
+  function renderOther() {
+    const data = models.other || {};
+    const blocked = models.private && !data.local;
+    const usable = !!data.usable && !blocked;
+    let stateText = S.ai_ok;
+    if (blocked) stateText = S.ai_r_private;
+    else if (!data.url) stateText = S.ai_r_other_url;
+    else if (data.status === 'off') stateText = S.ai_r_other_off;
+    else if (data.status === 'denied') stateText = S.ai_r_other_denied;
+    else if (!data.local && !data.key) stateText = S.ai_r_no_key;
+    else if (!data.model) stateText = S.ai_r_other_model;
+    const box = option('other', S.ai_e_other, S.ai_e_other_sub, usable, stateText);
+    const extra = el('div', 'extra');
+
+    // Welcher Dienst?
+    const custom = other.custom || data.service === 'custom';
+    const entries = (data.services || []).map((service) => ({
+      id: service.id,
+      name: service.local ? service.name + ' (' + S.ai_on_this_mac + ')' : service.name,
+    }));
+    entries.unshift({ id: '', name: S.ai_service_pick });
+    entries.push({ id: 'custom', name: S.ai_service_custom });
+    const line = el('div', 'line');
+    line.appendChild(el('label', '', S.ai_service));
+    const select = document.createElement('select');
+    for (const entry of entries) {
+      const item = document.createElement('option');
+      item.value = entry.id;
+      item.textContent = entry.name;
+      item.selected = entry.id === (custom ? 'custom' : data.service || '');
+      select.appendChild(item);
+    }
+    select.addEventListener('change', () => {
+      other.custom = select.value === 'custom';
+      other.urlDraft = null;
+      other.modelDraft = null;
+      if (other.custom) refreshModels();
+      else if (select.value) post({ c: 'aiSetting', key: 'otherService', value: select.value });
+    });
+    line.appendChild(select);
+    extra.appendChild(line);
+
+    if (custom) {
+      const urlLine = el('div', 'line');
+      const field = document.createElement('input');
+      field.type = 'text';
+      field.id = 'other-url';
+      field.autocomplete = 'off';
+      field.spellcheck = false;
+      field.placeholder = S.ai_service_url;
+      field.value = other.urlDraft !== null ? other.urlDraft : data.url || '';
+      const apply = button('tbtn', S.ai_apply, () => {
+        const value = field.value.trim();
+        if (!value) return;
+        other.urlDraft = null;
+        post({ c: 'aiSetting', key: 'otherUrl', value });
+      });
+      field.addEventListener('input', () => {
+        other.urlDraft = field.value;
+        // Solange hier eine andere Adresse steht als die eingetragene, nimmt
+        // das Schlüsselfeld darunter nichts an.
+        const pending = field.value.trim() !== (data.url || '');
+        const key = document.getElementById('other-key');
+        if (key) {
+          key.disabled = pending;
+          if (key.nextElementSibling) key.nextElementSibling.disabled = pending;
+        }
+      });
+      field.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') apply.click();
+      });
+      urlLine.appendChild(field);
+      urlLine.appendChild(apply);
+      extra.appendChild(urlLine);
+      if (data.status === 'badurl') extra.appendChild(el('div', 'small bad', S.ai_service_url_bad));
+      extra.appendChild(el('div', 'small', S.ai_service_url_hint));
+    }
+
+    if (data.url) {
+      // Schlüssel – auf diesem Mac braucht es keinen.
+      if (!data.local) {
+        const keyLine = el('div', 'line');
+        if (data.key) {
+          keyLine.appendChild(el('span', 'saved', S.ai_key_saved));
+          keyLine.appendChild(
+            button('tbtn', S.ai_key_remove, () => {
+              other.keyError = '';
+              post({ c: 'aiOtherKeyDelete' });
+            })
+          );
+        } else {
+          const field = document.createElement('input');
+          field.type = 'password';
+          field.id = 'other-key';
+          field.autocomplete = 'off';
+          field.spellcheck = false;
+          field.placeholder = S.ai_other_key;
+          field.value = other.keyDraft;
+          // Der Schlüssel gehört zu der Adresse, die eingetragen ist. Steht im
+          // Feld darüber eine andere, die noch nicht übernommen wurde, wird
+          // nichts gesichert – er ginge sonst an den Dienst von vorher.
+          const pending = custom && other.urlDraft !== null && other.urlDraft.trim() !== (data.url || '');
+          const save = button('tbtn primary', S.ai_key_save, () => {
+            const value = field.value.trim();
+            if (!value || pending) return;
+            other.keyError = '';
+            post({ c: 'aiOtherKey', key: value, url: data.url || '' });
+          });
+          field.disabled = pending;
+          save.disabled = pending;
+          if (pending) other.keyError = S.ai_key_other_url;
+          else if (other.keyError === S.ai_key_other_url) other.keyError = '';
+          field.addEventListener('input', () => {
+            other.keyDraft = field.value;
+          });
+          field.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') save.click();
+          });
+          keyLine.appendChild(field);
+          keyLine.appendChild(save);
+        }
+        extra.appendChild(keyLine);
+        if (other.keyError) extra.appendChild(el('div', 'small bad', other.keyError));
+        // OpenRouter kann den Schlüssel auch selbst ausstellen – nach Anmeldung dort.
+        if (data.openrouter && !data.key) {
+          const sign = el('div', 'line');
+          sign.appendChild(
+            button('tbtn', data.signingIn ? S.ai_oauth_again : S.ai_oauth, () => post({ c: 'aiOAuthStart' }))
+          );
+          extra.appendChild(sign);
+          extra.appendChild(el('div', 'small', data.signingIn ? S.ai_oauth_waiting : S.ai_oauth_hint));
+        }
+      }
+
+      // Modell: aus der Liste des Dienstes – oder von Hand, wenn er keine nennt.
+      const ready = data.local || data.key;
+      if (ready && (data.models || []).length) {
+        const names = data.models.map((name) => ({ id: name, name }));
+        if (!data.model) names.unshift({ id: '', name: S.ai_r_other_model });
+        extra.appendChild(picker(S.ai_model, names, data.model, 'otherModel'));
+      } else if (ready) {
+        const modelLine = el('div', 'line');
+        const field = document.createElement('input');
+        field.type = 'text';
+        field.id = 'other-model';
+        field.autocomplete = 'off';
+        field.spellcheck = false;
+        field.placeholder = S.ai_other_model;
+        field.value = other.modelDraft !== null ? other.modelDraft : data.model || '';
+        const apply = button('tbtn', S.ai_apply, () => {
+          const value = field.value.trim();
+          if (!value) return;
+          other.modelDraft = null;
+          post({ c: 'aiSetting', key: 'otherModel', value });
+        });
+        field.addEventListener('input', () => {
+          other.modelDraft = field.value;
+        });
+        field.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') apply.click();
+        });
+        modelLine.appendChild(field);
+        modelLine.appendChild(apply);
+        extra.appendChild(modelLine);
+        if (data.status === 'checking') extra.appendChild(el('div', 'small', S.ai_other_checking));
+      }
+      extra.appendChild(
+        el('div', 'small', data.local ? S.ai_other_local_hint : S.ai_other_remote_hint.replace('{host}', data.host || ''))
+      );
+    } else {
+      extra.appendChild(el('div', 'small', S.ai_other_hint));
+    }
+    box.appendChild(extra);
+    return box;
   }
 
   function refreshModels() {
-    // Ein angefangener Schlüssel und der Fokus überstehen das Neuzeichnen.
-    const field = $('key-field');
-    const focused = !!field && document.activeElement === field;
+    // Angefangene Eingaben und der Fokus überstehen das Neuzeichnen.
+    const active = document.activeElement;
+    const focused = active && ['key-field', 'other-url', 'other-key', 'other-model'].includes(active.id) ? active.id : '';
     renderModels();
-    const again = $('key-field');
-    if (focused && again) again.focus();
+    const again = focused ? $(focused) : null;
+    if (again) again.focus();
   }
 
   // ------------------------------------------------------------------------
@@ -947,7 +1130,10 @@
         if (mine(message)) finish('stopped');
         break;
       case 'aiKeyResult':
-        if (message.ok) {
+        if (message.other) {
+          other.keyError = message.ok ? '' : message.text || '';
+          if (message.ok) other.keyDraft = '';
+        } else if (message.ok) {
           keyDraft = '';
           keyError = '';
         } else {

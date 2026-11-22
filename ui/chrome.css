@@ -188,6 +188,123 @@ body.fullscreen #tabstrip {
   box-shadow: var(--tab-shadow);
 }
 
+/* Angeheftet: nur das Icon, ganz links. */
+.tab.pinned {
+  flex: 0 0 34px;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  justify-content: center;
+}
+
+.tab.pinned .title,
+.tab.pinned .x {
+  display: none !important;
+}
+
+.tab[hidden] {
+  display: none;
+}
+
+/* Tab-Gruppen: acht Farben, ein Kopf vor den Tabs, ein Strich darunter. */
+.gc0 { --gc: #5b8def; }
+.gc1 { --gc: #e5484d; }
+.gc2 { --gc: #e9a23b; }
+.gc3 { --gc: #30a46c; }
+.gc4 { --gc: #d6409f; }
+.gc5 { --gc: #8e4ec6; }
+.gc6 { --gc: #12a594; }
+.gc7 { --gc: #8b8d98; }
+
+.gchip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  max-width: 150px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--gc);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.gchip .n {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.gchip .k:empty {
+  display: none;
+}
+
+.gchip .k {
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+.gchip.closed {
+  background: transparent;
+  color: var(--gc);
+  box-shadow: inset 0 0 0 1.5px var(--gc);
+}
+
+.tab.grouped::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--gc);
+}
+
+.gname {
+  padding: 6px 6px 4px;
+}
+
+.gname input {
+  width: 100%;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+}
+
+.gname input:focus {
+  border-color: var(--accent);
+}
+
+.gcolors {
+  display: flex;
+  gap: 7px;
+  padding: 5px 9px 7px;
+}
+
+.gcolors button {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--gc);
+}
+
+.gcolors button.on {
+  box-shadow: 0 0 0 2px var(--pop), 0 0 0 3.5px var(--gc);
+}
+
 /* Der zweite Tab eines nebeneinander gezeigten Paars. */
 .tab.paired {
   color: var(--text);
@@ -1317,13 +1434,15 @@ body.sheet #scrim {
 
 #key.on,
 #reader.on,
+#translate.on,
 #mobile.on {
   color: var(--accent);
 }
 
 /* ---- Tarn-Ampel (Stealth-Fenster) ------------------------------------------ */
 
-#ampel {
+#ampel,
+#sec {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -1338,15 +1457,47 @@ body.sheet #scrim {
   cursor: default;
 }
 
-#ampel[hidden] {
+#ampel[hidden],
+#sec[hidden],
+#security[hidden] {
   display: none;
 }
 
-#ampel:hover {
+#ampel:hover,
+#sec:hover {
   background: rgba(0, 0, 0, 0.6);
 }
 
+/* Die Security-Ampel steht links, wo sonst das Schloss sitzt; die Zahl
+   daneben sagt, an wie vielen Stellen die Seite angreifbar wäre. */
+#sec {
+  margin: 0 4px 0 -3px;
+}
+
+/* Das kleine Schloss sagt, worum es dieser Ampel geht – im Stealth-Fenster
+   steht rechts noch die Tarn-Ampel, die etwas anderes misst. */
+#sec .ic {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-right: 1px;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+#sec b {
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.82);
+  font-variant-numeric: tabular-nums;
+}
+
+#sec b:empty {
+  display: none;
+}
+
 #ampel i,
+#sec i,
 .amh .lights i {
   display: block;
   width: 8px;
@@ -1359,6 +1510,7 @@ body.sheet #scrim {
 
 /* Das leuchtende Licht: heller Kern, weicher Schein, ruhiges Atmen. */
 #ampel.lvl0 i.r,
+#sec.lvl0 i.r,
 .amh.lvl0 .lights i.r {
   background: radial-gradient(circle at 35% 30%, #ffc2bb, #ff453a 55%, #c41f17);
   box-shadow: 0 0 6px 1px rgba(255, 69, 58, 0.75), 0 0 14px 3px rgba(255, 69, 58, 0.3);
@@ -1366,6 +1518,7 @@ body.sheet #scrim {
 }
 
 #ampel.lvl1 i.y,
+#sec.lvl1 i.y,
 .amh.lvl1 .lights i.y {
   background: radial-gradient(circle at 35% 30%, #fff0b8, #ffd60a 55%, #c79600);
   box-shadow: 0 0 6px 1px rgba(255, 214, 10, 0.7), 0 0 14px 3px rgba(255, 214, 10, 0.28);
@@ -1373,6 +1526,7 @@ body.sheet #scrim {
 }
 
 #ampel.lvl2 i.g,
+#sec.lvl2 i.g,
 .amh.lvl2 .lights i.g {
   background: radial-gradient(circle at 35% 30%, #c9ffdc, #32d74b 55%, #159b2d);
   box-shadow: 0 0 6px 1px rgba(50, 215, 75, 0.75), 0 0 14px 3px rgba(50, 215, 75, 0.3);
@@ -1391,6 +1545,7 @@ body.sheet #scrim {
 
 @media (prefers-reduced-motion: reduce) {
   #ampel i,
+  #sec i,
   .amh .lights i {
     animation: none !important;
   }
@@ -1546,6 +1701,67 @@ body.sheet #scrim {
   font-size: 11.5px;
 }
 
+/* Seitencheck: ein Befund – Punkt in der Farbe seiner Stufe, Titel, Erklärung. */
+.scf {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+
+.scf .dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+}
+
+.scf .dot.lvl0 {
+  background: #ff453a;
+}
+
+.scf .dot.lvl1 {
+  background: #ffd60a;
+}
+
+.scf .dot.lvl2 {
+  background: #32d74b;
+}
+
+.scf .dot.lvlx {
+  background: var(--muted);
+  opacity: 0.55;
+}
+
+.scf .txt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.scf .l {
+  display: block;
+  font-weight: 600;
+}
+
+.scf .n {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.scf.ok {
+  padding: 3px 10px;
+}
+
+.scf.ok .l {
+  font-weight: 400;
+}
+
 /* Schild des Werbeblockers: Zahl der gesperrten Abrufe; durchgestrichen, wenn
    er für diese Website aus ist. */
 #shield {
@@ -1638,7 +1854,8 @@ body.sheet #scrim {
   box-sizing: border-box;
 }
 
-#reader.on {
+#reader.on,
+#translate.on {
   background: var(--hover);
 }
 

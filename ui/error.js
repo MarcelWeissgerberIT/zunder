@@ -132,6 +132,28 @@
     return;
   }
 
+  // Die Adresse steht auf einer Liste gemeldeter Betrugs- und Schadseiten.
+  if (params.get('v') === 'guard') {
+    document.title = host || S.e_title;
+    $('title').textContent = S.e_guard_title;
+    $('text').textContent = S.e_guard_text.replace('{host}', host);
+    $('glyph').setAttribute('href', '#i-warning');
+    goBack($('retry'));
+    if (target) {
+      const open = $('more');
+      open.textContent = S.e_guard_open.replace('{host}', host);
+      open.hidden = false;
+      open.addEventListener('click', () => {
+        // Gilt für diesen Rechner, bis Zunder beendet wird – und wird nur von
+        // dieser Seite angenommen.
+        tell('g:' + target.hostname);
+        location.replace(target.href);
+      });
+    }
+    $('details').textContent = '';
+    return;
+  }
+
   // Die Adresse steht als ganze Seite auf einer Filterliste (Werbe- und
   // Betrugsseiten, die sich ungefragt öffnen): Der Blocker hat sie nicht geladen.
   if (domain === 'WebKitErrorDomain' && code === 104) {

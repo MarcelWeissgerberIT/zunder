@@ -93,6 +93,10 @@ pub enum UserEvent {
     Filters(crate::blocker::FilterEvent),
     /// Nur aufwachen: Es gibt etwas zu zeigen (Zähler der gesperrten Abrufe).
     Wake,
+    /// Die Liste der Websites mit abgelegten Daten ist da (für die Seitenleiste).
+    SiteData { window: WindowId, query: String, sites: Vec<(String, Vec<&'static str>)> },
+    /// Website-Daten wurden gelöscht – die Liste neu holen.
+    SiteDataChanged { window: WindowId, query: String },
     /// Text einer Seite für eine Anfrage an den Assistenten (JSON aus der Seite,
     /// also Material). `slot` zählt die Seiten der Anfrage durch; `usize::MAX`
     /// heißt: nicht länger warten.
@@ -101,6 +105,8 @@ pub enum UserEvent {
     Ai { window: WindowId, job: u64, ev: ai::Event },
     /// Welche Modelle gerade nutzbar sind.
     AiProbe(ai::Probe),
+    /// Modell-Liste oder Anmeldung beim „anderen Dienst“.
+    AiOther(ai::OtherEvent),
     /// WebKit hat die Website-Daten gelöscht. Die Zahl sagt, welcher Auftrag
     /// das war – auf den beim Beenden wartet die App.
     DataCleared(u64),
@@ -126,13 +132,32 @@ pub enum UserEvent {
     ClipboardExpire(isize),
     /// Ergebnis einer Abfrage an Zunders Skript in einer Seite (Lesemodus).
     PageAnswer { window: WindowId, tab: TabId, what: &'static str, result: Option<String> },
+    /// Seite übersetzen: Die Textstellen sind gesammelt oder eine Portion ist übersetzt.
+    Translate(crate::translate::TranslateEvent),
+    /// Seitencheck: Aufbau der Seite oder Merkmale ihrer Cookies sind da.
+    SiteCheck(crate::sitecheck::Event),
     /// Zeile von der Standardeingabe (nur mit ZUNDER_DEBUG).
     Debug(String),
     DebugOutput(String),
 }
 
+/// Eine Tab-Gruppe: ein Name, eine Farbe, und sie lässt sich zusammenklappen.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TabGroup {
+    pub id: u32,
+    pub name: String,
+    /// Eine von acht Farben der Oberfläche (0–7).
+    pub color: u8,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
 pub struct Tab {
     pub id: TabId,
+    /// Angeheftet: steht schmal ganz links und kommt nach jedem Start wieder.
+    pub pinned: bool,
+    /// Gehört zu dieser Tab-Gruppe des Fensters.
+    pub group: Option<u32>,
     /// Entsteht erst, wenn der Tab zum ersten Mal gezeigt wird.
     pub webview: Option<WebView>,
     /// Zuletzt übernommene Adresse – oder die, die beim ersten Zeigen geladen wird.
@@ -180,12 +205,21 @@ pub struct Tab {
     /// Websites, bei denen in diesem Tab ein Passwort eingegeben wurde – dort
     /// weiß die Website, wer man ist, gleich wie gut alles andere getarnt ist.
     pub signed_in: HashSet<String>,
+    /// Die Sprache, die die Seite über sich angibt (`lang` am Wurzelelement) –
+    /// nur ein Hinweis: Danach bietet die Adressleiste das Übersetzen an.
+    pub lang: String,
+    /// Die Seite wird gerade übersetzt oder steht übersetzt da.
+    pub translation: Option<crate::translate::Translation>,
+    /// Seitencheck: was über die Angriffsflächen der gezeigten Seite bekannt ist.
+    pub check: crate::sitecheck::State,
 }
 
 impl Tab {
     pub fn new(id: TabId, url: String) -> Self {
         Self {
             id,
+            pinned: false,
+            group: None,
             webview: None,
             url,
             pending: None,
@@ -209,6 +243,9 @@ impl Tab {
             asked: HashMap::new(),
             asked_rate: (Instant::now(), 0),
             signed_in: HashSet::new(),
+            lang: String::new(),
+            translation: None,
+            check: crate::sitecheck::State::default(),
         }
     }
 
@@ -253,6 +290,8 @@ pub struct Upgrade {
 /// Ein Browserfenster. Die Reihenfolge der Felder ist auch die Reihenfolge
 /// beim Aufräumen: erst die Tabs, dann der Rahmen, zuletzt das Fenster selbst.
 pub struct BrowserWindow {
+    /// Die Tab-Gruppen dieses Fensters.
+    pub groups: Vec<TabGroup>,
     /// Stealth-Fenster (immer auch privat) – und ob es über Tor läuft.
     pub stealth: bool,
     pub tor: bool,
@@ -384,6 +423,51 @@ impl BrowserWindow {
     }
 }
 
+impl BrowserWindow {
+    /// Stellt die Ordnung der Tab-Leiste her: Angeheftete stehen vorn (und
+    /// gehören keiner Gruppe an), die Tabs einer Gruppe stehen beieinander,
+    /// leere Gruppen verschwinden, und der aktive Tab ist nie weggeklappt.
+    pub fn tidy_tabs(&mut self) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        let active_id = self.tabs[self.active.min(self.tabs.len() - 1)].id;
+        let known: HashSet<u32> = self.groups.iter().map(|group| group.id).collect();
+        for tab in &mut self.tabs {
+            if tab.pinned || tab.group.is_some_and(|group| !known.contains(&group)) {
+                tab.group = None;
+            }
+        }
+        let (pinned, rest): (Vec<Tab>, Vec<Tab>) = std::mem::take(&mut self.tabs).into_iter().partition(|tab| tab.pinned);
+        let mut ordered = pinned;
+        let mut waiting: Vec<Option<Tab>> = rest.into_iter().map(Some).collect();
+        for index in 0..waiting.len() {
+            let Some(tab) = waiting[index].take() else {
+                continue;
+            };
+            let group = tab.group;
+            ordered.push(tab);
+            if group.is_some() {
+                // Die übrigen Tabs derselben Gruppe rücken hier auf.
+                for later in waiting.iter_mut().skip(index + 1) {
+                    if later.as_ref().is_some_and(|tab| tab.group == group) {
+                        ordered.extend(later.take());
+                    }
+                }
+            }
+        }
+        self.tabs = ordered;
+        let used: HashSet<u32> = self.tabs.iter().filter_map(|tab| tab.group).collect();
+        self.groups.retain(|group| used.contains(&group.id));
+        self.active = self.tabs.iter().position(|tab| tab.id == active_id).unwrap_or(0);
+        if let Some(group) = self.tabs[self.active].group {
+            if let Some(group) = self.groups.iter_mut().find(|g| g.id == group) {
+                group.collapsed = false;
+            }
+        }
+    }
+}
+
 pub struct Settings {
     pub engine: String,
     pub suggest: bool,
@@ -407,6 +491,8 @@ pub struct Settings {
     pub splash: bool,
     /// Die Filterlisten des Werbeblockers von selbst auffrischen.
     pub filter_update: bool,
+    /// Vor gemeldeten Betrugs- und Schadseiten schützen.
+    pub guard: bool,
     /// Beim Beenden Verlauf und Website-Daten löschen.
     pub clear_on_quit: bool,
     /// Nach dem Anmelden fragen, ob das Passwort gesichert werden soll.
@@ -449,6 +535,7 @@ impl Settings {
             bm_bar: flag("bm_bar", false),
             splash: flag("splash", true),
             filter_update: flag("filter_update", true),
+            guard: flag("guard", true),
             clear_on_quit: flag("clear_on_quit", false),
             pw_offer: flag("pw_offer", true),
         }
@@ -460,6 +547,14 @@ pub struct ActiveDownload {
     pub id: i64,
     pub url: String,
     pub path: PathBuf,
+}
+
+/// Eine laufende Anmeldung bei OpenRouter: das Geheimnis, mit dem allein sich
+/// der Einmal-Code einlösen lässt, und der Tab, in dem sie stattfindet.
+pub struct OAuthFlow {
+    pub verifier: String,
+    pub at: Instant,
+    pub tab: TabId,
 }
 
 /// Was der Knopf eines Hinweises auslöst.
@@ -477,6 +572,8 @@ pub enum NoticeAction {
     /// Den Werbeblocker für eine Website abschalten, die Besucher mit Blocker
     /// aussperrt (Fenster, Tab, Website) – der Tab geht danach zu ihrer Startseite.
     BlockerOff(WindowId, TabId, String),
+    /// Das Übersetzen einer Seite abbrechen bzw. ihr Original zurückholen (Fenster, Tab).
+    TranslateUndo(WindowId, TabId),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -484,11 +581,17 @@ struct SessionTab {
     url: String,
     #[serde(default)]
     title: String,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    group: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct SessionWindow {
     tabs: Vec<SessionTab>,
+    #[serde(default)]
+    groups: Vec<TabGroup>,
     #[serde(default)]
     active: usize,
     x: f64,
@@ -523,7 +626,18 @@ pub struct App {
     pub closed: Vec<(String, String)>,
     pub active_downloads: Vec<ActiveDownload>,
     pub notices: HashMap<u64, NoticeAction>,
+    /// Zu welcher Seite ein Hinweis mit Knopf gehört (Fenster, Tab, Website).
+    /// Wechselt der Tab die Website, geht er zu oder nach hinten, hat sich der
+    /// Hinweis erledigt – sonst gälte ein Klick einer anderen Seite als der,
+    /// die gefragt hat.
+    pub notice_owners: HashMap<u64, (WindowId, TabId, String)>,
     pub next_notice: u64,
+    /// Zählt die Aufträge zum Übersetzen einer Seite durch.
+    pub next_translation: u64,
+    /// Tabs, deren Übersetzung wartet, bis bekannt ist, welche Modelle es gibt.
+    pub translate_deferred: Vec<(WindowId, TabId, String)>,
+    /// Zählt die Läufe des Seitenchecks durch.
+    pub next_check: u64,
     pub blocker: Blocker,
     pub ua_suffix: String,
     pub data_dir: PathBuf,
@@ -537,6 +651,10 @@ pub struct App {
     pub ai_probe: Option<ai::Probe>,
     pub ai_probe_at: Option<Instant>,
     pub ai_probing: bool,
+    /// Stand der letzten Prüfung des „anderen Dienstes“ (leer, `checking`, `ok`, `off`, `denied`, `error`).
+    pub ai_other_status: String,
+    /// Eine laufende Anmeldung bei OpenRouter.
+    pub oauth: Option<OAuthFlow>,
     /// Fragen, die warten, bis die Modelle festgestellt sind.
     pub ai_deferred: Vec<(WindowId, Value)>,
     pub ai_next_job: u64,
@@ -558,6 +676,9 @@ pub struct App {
     pub clipboard_count: Option<isize>,
     /// Websites, die Geräte im eigenen Netz ansprechen dürfen.
     pub local_sites: Vec<String>,
+    /// Dasselbe, aber nur bis zum Beenden: Erlaubnisse aus privaten und
+    /// Stealth-Fenstern. Sie stehen in keiner Einstellung.
+    pub local_sites_session: Vec<String>,
     /// Websites, auf denen der Werbeblocker abgeschaltet ist (gespeichert –
     /// was nur in einem privaten Fenster abgeschaltet wurde, steht hier nicht).
     pub blocker_off: Vec<String>,
@@ -700,7 +821,7 @@ fn loadable(url: &str, private: bool) -> String {
     if url.is_empty() || omnibox::is_newtab(url) {
         return blank.to_string();
     }
-    let url = omnibox::error_target(url).unwrap_or_else(|| url.to_string());
+    let url = omnibox::error_retry(url).unwrap_or_else(|| url.to_string());
     match url::Url::parse(&url) {
         // Von den internen Seiten lädt ein Tab von sich aus nur die Startseite.
         Ok(parsed) if matches!(parsed.scheme(), "http" | "https" | "file" | "about" | "data") => parsed.to_string(),
@@ -763,6 +884,7 @@ impl App {
             &local_sites,
             blocker_off.iter().cloned().collect(),
             settings.filter_update,
+            settings.guard,
             &data_dir,
             proxy.clone(),
         );
@@ -780,7 +902,11 @@ impl App {
             closed: Vec::new(),
             active_downloads: Vec::new(),
             notices: HashMap::new(),
+            notice_owners: HashMap::new(),
             next_notice: 0,
+            next_translation: 0,
+            translate_deferred: Vec::new(),
+            next_check: 0,
             blocker,
             data_dir,
             session_dirty: None,
@@ -794,6 +920,8 @@ impl App {
             ai_probe: None,
             ai_probe_at: None,
             ai_probing: false,
+            ai_other_status: String::new(),
+            oauth: None,
             ai_deferred: Vec::new(),
             ai_next_job: 0,
             quitting: false,
@@ -806,6 +934,7 @@ impl App {
             export_until: None,
             clipboard_count: None,
             local_sites,
+            local_sites_session: Vec::new(),
             local_noticed: HashSet::new(),
             blocker_off,
             stealth_next: false,
@@ -839,9 +968,9 @@ impl App {
         } else {
             self.settings.splash
         };
-        if self.settings.restore {
-            self.restore_session(target);
-        }
+        // Angeheftete Tabs kommen immer wieder – auch wenn die letzte Sitzung
+        // sonst nicht wiederhergestellt werden soll.
+        self.restore_session(target, !self.settings.restore);
         if !urls.is_empty() {
             self.open_urls(target, urls);
         } else if self.windows.is_empty() {
@@ -988,9 +1117,23 @@ impl App {
                 self.send_filter_info();
             }
             UserEvent::Wake => {}
+            UserEvent::SiteData { window, query, sites } => {
+                let needle = query.to_lowercase();
+                let items: Vec<Value> = sites
+                    .iter()
+                    .filter(|(site, _)| needle.is_empty() || site.to_lowercase().contains(&needle))
+                    .take(800)
+                    .map(|(site, kinds)| json!({ "site": site, "kinds": kinds }))
+                    .collect();
+                if let Some(win) = self.windows.get_mut(&window) {
+                    win.send(json!({ "t": "panel", "name": "sitedata", "q": query, "data": { "items": items, "total": sites.len() } }));
+                }
+            }
+            UserEvent::SiteDataChanged { window, query } => self.send_panel(window, "sitedata", &query),
             UserEvent::AiPage { window, job, slot, json } => self.ai_page_ready(window, job, slot, json),
             UserEvent::Ai { window, job, ev } => self.ai_event(window, job, ev),
             UserEvent::AiProbe(probe) => self.ai_probe_done(probe),
+            UserEvent::AiOther(event) => self.ai_other_event(event),
             UserEvent::Ping(ping) => {
                 let Some((window, index)) = self.find_webview(ping.webview) else {
                     return;
@@ -1035,6 +1178,8 @@ impl App {
             UserEvent::FileChosen { window, purpose, path } => self.file_chosen(window, purpose, path),
             UserEvent::ClipboardExpire(count) => self.clipboard_expire(count),
             UserEvent::PageAnswer { window, tab, what, result } => self.page_answer(window, tab, what, result),
+            UserEvent::Translate(event) => self.translate_event(event),
+            UserEvent::SiteCheck(event) => self.check_event(event),
             // Befehle der Prüfhilfe: In der ausgelieferten App gibt es sie nicht.
             UserEvent::Debug(line) => {
                 if crate::dev::BUILT_IN {
@@ -1121,9 +1266,13 @@ impl App {
             tab.last_used = Instant::now();
             return;
         }
-        if index != active && !tab.loading && tab.last_used.elapsed() >= unload_after {
+        // Ein Tab, der gerade übersetzt wird, arbeitet noch.
+        let translating = tab.translation.as_ref().is_some_and(|translation| translation.running());
+        if index != active && !tab.loading && !translating && tab.last_used.elapsed() >= unload_after {
             tab.webview = None;
             tab.pending = None;
+            // Mit der Seite ist auch ihre Übersetzung fort.
+            tab.translation = None;
         }
     }
 
@@ -1207,6 +1356,7 @@ impl App {
                 .collect();
             crate::blocker::keep_only(&live);
             native::keep_stealth(&live);
+            native::keep_responses(&live);
             if STARTED.get().is_some_and(|at| at.elapsed() >= Duration::from_secs(45)) && self.blocker.refresh(false) {
                 self.send_filter_info();
             }
@@ -1286,6 +1436,7 @@ impl App {
                         tab.loading = false;
                         tab.pending = None;
                         tab.upgrade = None;
+                        tab.translation = None;
                     }
                     if visible {
                         shown.push(index);
@@ -1399,7 +1550,8 @@ impl App {
             .into_iter()
             .map(|(url, title)| {
                 let mut tab = Tab::new(shared.next_id(), loadable(&url, private));
-                tab.title = title;
+                // Aus der Sitzungsdatei – so lang, wie ein Titel eben ist.
+                tab.title = title.chars().take(300).collect();
                 tab
             })
             .collect();
@@ -1413,6 +1565,7 @@ impl App {
         self.windows.insert(
             id,
             BrowserWindow {
+                groups: Vec::new(),
                 tabs,
                 active,
                 chrome,
@@ -1654,6 +1807,12 @@ impl App {
                 }
             }
             win.active = index;
+            // Ein Tab aus einer zugeklappten Gruppe kommt nach vorn: Sie klappt auf.
+            if let Some(group) = win.tabs[index].group {
+                if let Some(group) = win.groups.iter_mut().find(|g| g.id == group) {
+                    group.collapsed = false;
+                }
+            }
         }
         self.ensure_webview(id, index);
         let Some(win) = self.windows.get_mut(&id) else {
@@ -1680,6 +1839,11 @@ impl App {
             let _ = win.chrome.focus();
             win.send(json!({ "t": "focusAddress" }));
         }
+        // Ein Hinweis fragt für die Seite, die man vor sich hat – nicht für eine im Hintergrund.
+        self.notices_end_hidden(id);
+        let Some(win) = self.windows.get_mut(&id) else {
+            return;
+        };
         win.last_progress = 0.0;
         win.dirty = true;
         self.session_changed();
@@ -1701,14 +1865,18 @@ impl App {
         let url = loadable(url.as_deref().unwrap_or(""), win.private);
         let mut tab = Tab::new(win.shared.next_id(), url);
         tab.opener = opener;
-        let position = opener
-            .and_then(|o| win.tabs.iter().position(|t| t.id == o))
-            .map(|i| i + 1)
-            .unwrap_or(win.tabs.len());
+        let new_id = tab.id;
+        let from = opener.and_then(|o| win.tabs.iter().position(|t| t.id == o));
+        // Was aus einem Tab einer Gruppe heraus aufgeht, gehört dazu.
+        tab.group = from.and_then(|i| win.tabs[i].group);
+        let position = from.map(|i| i + 1).unwrap_or(win.tabs.len());
         win.tabs.insert(position, tab);
         if position <= win.active {
             win.active += 1;
         }
+        // Neben einem angehefteten Tab entsteht nichts – der neue rückt hinter sie.
+        win.tidy_tabs();
+        let position = win.tabs.iter().position(|t| t.id == new_id).unwrap_or(position);
         win.dirty = true;
         if foreground {
             self.activate_tab(id, position);
@@ -1744,6 +1912,11 @@ impl App {
         let closed_id = tab.id;
         drop(tab);
         win.dirty = true;
+        // Was der geschlossene Tab noch gefragt hatte, hat sich erledigt.
+        self.notices_end(id, closed_id, None);
+        let Some(win) = self.windows.get_mut(&id) else {
+            return;
+        };
         if index < win.active {
             win.active -= 1;
         } else if index == win.active {
@@ -1936,6 +2109,142 @@ impl App {
         })
     }
 
+    // --- Angeheftete Tabs und Tab-Gruppen -----------------------------------
+
+    /// Nach jeder Änderung an Anheftung oder Gruppen: ordnen, zeigen, sichern.
+    fn tabs_changed(&mut self, id: WindowId) {
+        if let Some(win) = self.windows.get_mut(&id) {
+            win.tidy_tabs();
+            win.dirty = true;
+        }
+        self.session_changed();
+    }
+
+    pub fn pin_tab(&mut self, id: WindowId, index: usize, pinned: bool) {
+        let Some(tab) = self.windows.get_mut(&id).and_then(|w| w.tabs.get_mut(index)) else {
+            return;
+        };
+        tab.pinned = pinned;
+        tab.group = None;
+        self.tabs_changed(id);
+    }
+
+    /// Legt eine neue Gruppe an und steckt den Tab hinein.
+    pub fn group_new(&mut self, id: WindowId, index: usize) {
+        let Some(win) = self.windows.get_mut(&id) else {
+            return;
+        };
+        if index >= win.tabs.len() || win.groups.len() >= 40 {
+            return;
+        }
+        // Auch eine verbogene Sitzungsdatei mit der größten denkbaren Nummer bringt hier nichts zum Überlaufen.
+        let Some(group) = win.groups.iter().map(|g| g.id).max().unwrap_or(0).checked_add(1) else {
+            return;
+        };
+        let name = t("tg_default").replace("{n}", &group.to_string());
+        win.groups.push(TabGroup { id: group, name, color: ((group - 1) % 8) as u8, collapsed: false });
+        win.tabs[index].pinned = false;
+        win.tabs[index].group = Some(group);
+        self.tabs_changed(id);
+    }
+
+    /// Steckt den Tab in eine bestehende Gruppe – oder nimmt ihn heraus (`None`).
+    pub fn group_set(&mut self, id: WindowId, index: usize, group: Option<u32>) {
+        let Some(win) = self.windows.get_mut(&id) else {
+            return;
+        };
+        if index >= win.tabs.len() || group.is_some_and(|group| !win.groups.iter().any(|g| g.id == group)) {
+            return;
+        }
+        let moved_id = win.tabs[index].id;
+        let active_id = win.tabs[win.active].id;
+        let mut tab = win.tabs.remove(index);
+        tab.pinned = false;
+        tab.group = group;
+        // Hinter den letzten Tab der Gruppe – beim Herausnehmen ans Ende der Leiste.
+        let position = group
+            .and_then(|group| win.tabs.iter().rposition(|t| t.group == Some(group)))
+            .map(|last| last + 1)
+            .unwrap_or(win.tabs.len());
+        win.tabs.insert(position, tab);
+        win.active = win.tabs.iter().position(|t| t.id == active_id).unwrap_or(0);
+        let _ = moved_id;
+        self.tabs_changed(id);
+    }
+
+    /// Klappt eine Gruppe zu oder auf. Liegt der aktive Tab darin, kommt
+    /// vorher ein anderer nach vorn – gibt es keinen, bleibt sie offen.
+    pub fn group_toggle(&mut self, id: WindowId, group: u32) {
+        let Some(win) = self.windows.get(&id) else {
+            return;
+        };
+        let Some(collapsed) = win.groups.iter().find(|g| g.id == group).map(|g| g.collapsed) else {
+            return;
+        };
+        if !collapsed && win.tabs[win.active].group == Some(group) {
+            let visible = |tab: &Tab| {
+                tab.group != Some(group) && !tab.group.is_some_and(|g| win.groups.iter().any(|other| other.id == g && other.collapsed))
+            };
+            let after = win.tabs.iter().enumerate().skip(win.active).find(|(_, tab)| visible(tab)).map(|(i, _)| i);
+            let before = win.tabs.iter().enumerate().take(win.active).rev().find(|(_, tab)| visible(tab)).map(|(i, _)| i);
+            match after.or(before) {
+                Some(other) => self.activate_tab(id, other),
+                None => return,
+            }
+        }
+        if let Some(entry) = self.windows.get_mut(&id).and_then(|w| w.groups.iter_mut().find(|g| g.id == group)) {
+            entry.collapsed = !collapsed;
+        }
+        // Der aktive Tab liegt jetzt außerhalb – `tidy_tabs` klappt nichts wieder auf.
+        self.tabs_changed(id);
+    }
+
+    pub fn group_edit(&mut self, id: WindowId, group: u32, name: Option<&str>, color: Option<u8>) {
+        let Some(entry) = self.windows.get_mut(&id).and_then(|w| w.groups.iter_mut().find(|g| g.id == group)) else {
+            return;
+        };
+        if let Some(name) = name {
+            let name: String = name.trim().chars().filter(|c| !c.is_control()).take(40).collect();
+            if !name.is_empty() {
+                entry.name = name;
+            }
+        }
+        if let Some(color) = color {
+            entry.color = color % 8;
+        }
+        self.tabs_changed(id);
+    }
+
+    /// Löst die Gruppe auf – die Tabs bleiben.
+    pub fn group_dissolve(&mut self, id: WindowId, group: u32) {
+        if let Some(win) = self.windows.get_mut(&id) {
+            for tab in &mut win.tabs {
+                if tab.group == Some(group) {
+                    tab.group = None;
+                }
+            }
+        }
+        self.tabs_changed(id);
+    }
+
+    /// Schließt die Gruppe samt ihren Tabs.
+    pub fn group_close(&mut self, id: WindowId, group: u32) {
+        loop {
+            let Some(win) = self.windows.get(&id) else {
+                return;
+            };
+            // Der letzte Tab des Fensters bleibt – sonst ginge das Fenster mit zu.
+            if win.tabs.len() == 1 {
+                break;
+            }
+            let Some(victim) = win.tabs.iter().position(|tab| tab.group == Some(group)) else {
+                break;
+            };
+            self.close_tab(id, victim);
+        }
+        self.group_dissolve(id, group);
+    }
+
     /// Sagt allen Fenstern, wie es um die Filterlisten steht (für die Einstellungen).
     pub fn send_filter_info(&mut self) {
         let info = self.blocker.info();
@@ -1946,7 +2255,7 @@ impl App {
 
     /// Schaltet den Werbeblocker für die Website des aktiven Tabs ab oder an
     /// und lädt die Seite neu, damit es sofort gilt.
-    pub fn set_blocker_for_site(&mut self, id: WindowId, off: bool) {
+    pub fn set_blocker_for_site(&mut self, id: WindowId, off: bool, expected: &str) {
         let Some(win) = self.windows.get(&id) else {
             return;
         };
@@ -1960,6 +2269,11 @@ impl App {
         let Some(site) = crate::sites::domain_of(&shown) else {
             return;
         };
+        // Der Schalter gilt der Website, die beim Klick dastand. Zeigt der Tab
+        // inzwischen eine andere, passiert nichts.
+        if site != expected {
+            return;
+        }
         let (private, index) = (win.private, win.active);
         self.set_site_blocker(&site, off, private);
         self.reload(id, index, false);
@@ -2127,13 +2441,21 @@ impl App {
         });
     }
 
-    /// Erlaubt einer Website dauerhaft, Geräte im eigenen Netz anzusprechen.
-    pub fn allow_local_site(&mut self, site: &str) {
+    /// Erlaubt einer Website, Geräte im eigenen Netz anzusprechen – dauerhaft,
+    /// oder (`private`, aus einem privaten oder Stealth-Fenster) nur bis zum
+    /// Beenden: Von dort landet nichts in den Einstellungen.
+    pub fn allow_local_site(&mut self, site: &str, private: bool) {
         let site = crate::sites::split_host(site).1;
         if !native::allow_local_site(&site) || self.local_sites.contains(&site) {
             return;
         }
-        self.local_sites.push(site);
+        if private {
+            if !self.local_sites_session.contains(&site) && self.local_sites_session.len() < 200 {
+                self.local_sites_session.push(site);
+            }
+        } else {
+            self.local_sites.push(site);
+        }
         self.local_sites_changed();
     }
 
@@ -2144,12 +2466,14 @@ impl App {
     }
 
     fn local_sites_changed(&mut self) {
-        native::set_local_sites(self.local_sites.iter().cloned().collect());
+        // Gemerkt wird nur das Dauerhafte; es gilt beides.
+        let all: Vec<String> = self.local_sites.iter().chain(&self.local_sites_session).cloned().collect();
+        native::set_local_sites(all.iter().cloned().collect());
         self.store.set_setting(
             "local_sites",
             &serde_json::to_string(&self.local_sites).unwrap_or_else(|_| "[]".into()),
         );
-        self.blocker.compile_local(&self.local_sites);
+        self.blocker.compile_local(&all);
     }
 
     // -----------------------------------------------------------------------
@@ -2171,13 +2495,21 @@ impl App {
                     "loading": tab.loading,
                     "paired": win.in_split(tab.id),
                     "url": omnibox::pretty_url(tab.shown_url()),
+                    "pinned": tab.pinned,
+                    "group": tab.group,
                 })
             })
             .collect();
         let Some(active) = win.active_tab() else {
             return;
         };
-        let shown = active.shown_url();
+        // Ein Fenster, das eine Seite per Skript geöffnet und selbst befüllt hat,
+        // hat keine Adresse. Es darf nicht aussehen wie die Startseite (leere
+        // Adresszeile) – dort steht dann, was es ist.
+        let shown = match active.shown_url() {
+            "" if active.opener.is_some() => "about:blank",
+            other => other,
+        };
         let (can_back, can_forward) = match &active.webview {
             Some(webview) => (
                 webview.can_go_back().unwrap_or(false),
@@ -2214,6 +2546,7 @@ impl App {
             "t": "state",
             "tabs": tabs,
             "active": active.id,
+            "groups": win.groups,
             "private": win.private,
             "stealth": win.stealth,
             "tor": win.tor,
@@ -2242,6 +2575,9 @@ impl App {
             "logins": self.logins_state(id),
             "reader": active.reader,
             "canRead": active.readable || active.reader,
+            "check": active.check.view,
+            "translated": active.translation.is_some(),
+            "canTranslate": active.translation.is_some() || crate::translate::foreign(&active.lang),
             "mobile": active.mobile,
             "ampel": self.ampel(id),
             "shield": {
@@ -2275,22 +2611,115 @@ impl App {
         action: Option<(&str, NoticeAction)>,
         timeout_ms: u64,
     ) {
-        self.notice_with(id, text, action, timeout_ms, false);
+        self.notice_with(id, text, action, timeout_ms, 0);
+    }
+
+    /// Wie `notice`, nennt aber die Kennung des Hinweises – wer sie hat, kann
+    /// seinen Text später ändern (`noticeText`) oder ihn schließen (`noticeHide`).
+    pub fn notice_id(
+        &mut self,
+        id: WindowId,
+        text: String,
+        action: Option<(&str, NoticeAction)>,
+        timeout_ms: u64,
+    ) -> u64 {
+        self.notice_with(id, text, action, timeout_ms, 0)
     }
 
     /// Ein Hinweis, der auffallen soll: eine Warnung.
     pub fn warn(&mut self, id: WindowId, text: String, timeout_ms: u64) {
-        self.notice_with(id, text, None, timeout_ms, true);
+        self.notice_with(id, text, None, timeout_ms, 1);
     }
 
+    /// Eine Warnung, die stehen bleiben muss: Nichts, was eine Seite auslösen
+    /// kann, schiebt sie in ihren ersten Sekunden beiseite (Passwort am falschen Ort).
+    pub fn warn_keep(&mut self, id: WindowId, text: String, timeout_ms: u64) {
+        self.notice_with(id, text, None, timeout_ms, 2);
+    }
+
+    /// Ein Hinweis, den die Seite eines Tabs ausgelöst hat. Er erscheint nur,
+    /// solange dieser Tab zu sehen ist, und gehört zu der Website, die der Tab
+    /// in diesem Moment zeigt. `false`: nicht gezeigt.
+    pub fn notice_from(
+        &mut self,
+        id: WindowId,
+        tab: TabId,
+        text: String,
+        action: Option<(&str, NoticeAction)>,
+        timeout_ms: u64,
+    ) -> bool {
+        let Some(win) = self.windows.get(&id) else {
+            return false;
+        };
+        let Some(site) = win.tabs.iter().find(|candidate| candidate.id == tab).map(|tab| crate::shield::host_of(&tab.url)) else {
+            return false;
+        };
+        if !win.shows(tab) {
+            return false;
+        }
+        let owned = action.is_some();
+        let notice = self.notice_with(id, text, action, timeout_ms, 0);
+        if owned {
+            self.notice_owners.insert(notice, (id, tab, site));
+        }
+        true
+    }
+
+    /// Hinweise, die zu einem Tab gehören, haben sich erledigt. Mit `site`
+    /// bleiben die stehen, die zu genau dieser Website gehören (der Tab ist
+    /// innerhalb derselben Website weitergegangen).
+    pub fn notices_end(&mut self, id: WindowId, tab: TabId, site: Option<&str>) {
+        let gone: Vec<u64> = self
+            .notice_owners
+            .iter()
+            .filter(|(_, (window, owner, from))| *window == id && *owner == tab && site != Some(from.as_str()))
+            .map(|(notice, _)| *notice)
+            .collect();
+        for notice in gone {
+            self.notice_owners.remove(&notice);
+            self.notices.remove(&notice);
+            if let Some(win) = self.windows.get_mut(&id) {
+                win.send(json!({ "t": "noticeHide", "id": notice }));
+            }
+        }
+    }
+
+    /// Nach einem Wechsel des Tabs: Hinweise von Tabs, die nicht mehr zu sehen sind, verschwinden.
+    pub fn notices_end_hidden(&mut self, id: WindowId) {
+        let Some(win) = self.windows.get(&id) else {
+            return;
+        };
+        let hidden: Vec<TabId> = self
+            .notice_owners
+            .values()
+            .filter(|(window, tab, _)| *window == id && !win.shows(*tab))
+            .map(|(_, tab, _)| *tab)
+            .collect();
+        for tab in hidden {
+            self.notices_end(id, tab, None);
+        }
+    }
+
+    /// Gilt der Knopf eines Hinweises noch der Seite, die ihn ausgelöst hat?
+    /// Hinweise ohne Besitzer (Download fertig, Einstellungen) gelten immer.
+    pub fn notice_still_valid(&mut self, notice: u64) -> bool {
+        let Some((window, tab, site)) = self.notice_owners.remove(&notice) else {
+            return true;
+        };
+        self.windows.get(&window).is_some_and(|win| {
+            win.shows(tab) && win.tabs.iter().any(|candidate| candidate.id == tab && crate::shield::host_of(&candidate.url) == site)
+        })
+    }
+
+    /// `level`: 0 gewöhnlich, 1 Warnung, 2 Warnung, die stehen bleiben muss.
     fn notice_with(
         &mut self,
         id: WindowId,
         text: String,
         action: Option<(&str, NoticeAction)>,
         timeout_ms: u64,
-        warning: bool,
-    ) {
+        level: u8,
+    ) -> u64 {
         self.next_notice += 1;
         let notice_id = self.next_notice;
         let label = action.as_ref().map(|(label, _)| label.to_string());
@@ -2299,6 +2728,7 @@ impl App {
             if self.notices.len() > 50 {
                 if let Some(oldest) = self.notices.keys().min().copied() {
                     self.notices.remove(&oldest);
+                    self.notice_owners.remove(&oldest);
                 }
             }
         }
@@ -2309,9 +2739,11 @@ impl App {
                 "text": text,
                 "action": label,
                 "timeout": timeout_ms,
-                "warn": warning,
+                "warn": level > 0,
+                "keep": level > 1,
             }));
         }
+        notice_id
     }
 
     /// Bereitet die Daten der Startseite vor (Lesezeichen und oft Besuchtes).
@@ -2365,8 +2797,10 @@ impl App {
                 .tabs
                 .iter()
                 .map(|tab| SessionTab {
-                    url: omnibox::error_target(&tab.url).unwrap_or_else(|| tab.url.clone()),
+                    url: omnibox::error_retry(&tab.url).unwrap_or_else(|| tab.url.clone()),
                     title: tab.title.clone(),
+                    pinned: tab.pinned,
+                    group: tab.group,
                 })
                 .collect();
             let scale = win.window.scale_factor();
@@ -2378,6 +2812,7 @@ impl App {
             let (w, h) = win.size();
             session.windows.push(SessionWindow {
                 tabs,
+                groups: win.groups.clone(),
                 active: win.active,
                 x: position.x,
                 y: position.y,
@@ -2400,20 +2835,33 @@ impl App {
         }
     }
 
-    fn restore_session(&mut self, target: &Target) {
+    fn restore_session(&mut self, target: &Target, pinned_only: bool) {
         let Ok(text) = std::fs::read_to_string(self.session_file()) else {
             return;
         };
         let Ok(session) = serde_json::from_str::<Session>(&text) else {
             return;
         };
-        for window in session.windows.into_iter().take(12) {
-            let seeds: Vec<(String, String)> = window
-                .tabs
-                .into_iter()
-                .take(400)
-                .map(|t| (t.url, t.title))
+        for mut window in session.windows.into_iter().take(12) {
+            window.tabs.truncate(400);
+            if pinned_only {
+                window.tabs.retain(|tab| tab.pinned);
+                window.groups.clear();
+                window.active = 0;
+            }
+            let saved: Vec<(bool, Option<u32>)> = window.tabs.iter().map(|tab| (tab.pinned, tab.group)).collect();
+            let groups: Vec<TabGroup> = window
+                .groups
+                .iter()
+                .take(40)
+                .map(|group| TabGroup {
+                    id: group.id,
+                    name: group.name.chars().filter(|c| !c.is_control()).take(40).collect(),
+                    color: group.color % 8,
+                    collapsed: group.collapsed,
+                })
                 .collect();
+            let seeds: Vec<(String, String)> = window.tabs.into_iter().map(|t| (t.url, t.title)).collect();
             if seeds.is_empty() {
                 continue;
             }
@@ -2426,7 +2874,17 @@ impl App {
                 w: sane(window.w, 420.0, 10000.0),
                 h: sane(window.h, 300.0, 8000.0),
             };
-            self.create_window(target, false, seeds, window.active, Some(frame));
+            let Some(id) = self.create_window(target, false, seeds, window.active, Some(frame)) else {
+                continue;
+            };
+            if let Some(win) = self.windows.get_mut(&id) {
+                for (tab, (pinned, group)) in win.tabs.iter_mut().zip(saved) {
+                    tab.pinned = pinned;
+                    tab.group = group;
+                }
+                win.groups = groups;
+                win.tidy_tabs();
+            }
         }
     }
 
@@ -2483,6 +2941,8 @@ impl App {
                                     "title": t.title, "loading": t.loading,
                                     "favicon": t.favicon, "live": t.webview.is_some(),
                                     "zoom": t.zoom, "reader": t.reader,
+                                    "lang": t.lang, "translation": t.translation.as_ref().map(|translation| translation.dump()),
+                                    "check": t.check.view,
                                     "blocked": t.webview.as_ref().map(|w| crate::blocker::blocked(native::key(w))),
                                     "adsOff": crate::blocker::site_off(&t.url),
                                     "login": {

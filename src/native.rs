@@ -58,6 +58,11 @@ pub enum NavKind {
     /// Eine Seite wollte im Hintergrund ein Gerät im eigenen Netz ansprechen;
     /// WebKit hat das nach Zunders Regeln verhindert.
     LocalBlocked { url: String },
+    /// Rücksprung von der Anmeldung bei OpenRouter – mit dem Einmal-Code in der Adresse.
+    OAuthCode { url: String },
+    /// Die Adresse steht auf der Liste gemeldeter Betrugs- und Schadseiten.
+    /// `in_place`: Der Tab selbst wollte dorthin – sonst ein neues Fenster.
+    Guard { url: String, in_place: bool },
 }
 
 #[derive(Debug)]
@@ -133,6 +138,16 @@ pub fn guards() -> Guards {
 }
 
 thread_local! {
+    /// Läuft gerade eine Anmeldung bei OpenRouter? Nur dann wird ihr Rücksprung abgefangen.
+    static OAUTH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Schaltet das Abfangen des Rücksprungs der Anmeldung ein oder aus.
+pub fn expect_oauth(on: bool) {
+    OAUTH.with(|flag| flag.set(on));
+}
+
+thread_local! {
     /// Tabs von Stealth-Fenstern: Für sie gelten die Schutzschalter immer.
     static STEALTH: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
 }
@@ -142,8 +157,23 @@ pub fn mark_stealth(key: usize) {
     STEALTH.with(|tabs| tabs.borrow_mut().insert(key));
 }
 
+thread_local! {
+    /// Stealth-Tabs, deren Tunnel sich nicht einrichten ließ: Sie laden nichts.
+    static UNROUTED: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+}
+
+/// Dieser Stealth-Tab hat keinen Tunnel bekommen, obwohl einer da wäre.
+pub fn mark_unrouted(key: usize) {
+    UNROUTED.with(|set| set.borrow_mut().insert(key));
+}
+
+fn unrouted(key: usize) -> bool {
+    UNROUTED.with(|set| set.borrow().contains(&key))
+}
+
 /// Räumt die Vermerke zu Tabs weg, die es nicht mehr gibt.
 pub fn keep_stealth(live: &HashSet<usize>) {
+    UNROUTED.with(|set| set.borrow_mut().retain(|key| live.contains(key)));
     STEALTH.with(|tabs| tabs.borrow_mut().retain(|key| live.contains(key)));
 }
 
@@ -285,7 +315,19 @@ fn internal_expected(url: &str) -> bool {
 /// noch nicht gibt.
 pub fn user_navigation(webview: Option<usize>, url: &str) {
     let host = crate::shield::host_of(url);
-    if host.is_empty() || !crate::shield::is_local_host(&host) {
+    if host.is_empty() {
+        return;
+    }
+    // Für jede Adresse gemerkt: Diese Navigation kommt vom Menschen am Browser
+    // (siehe `started_by_user`).
+    USER_STARTED.with(|list| {
+        let mut list = list.borrow_mut();
+        list.retain(|(_, _, at)| at.elapsed() < EXPECT_WINDOW);
+        if list.len() < 200 {
+            list.push((host.clone(), webview, Instant::now()));
+        }
+    });
+    if !crate::shield::is_local_host(&host) {
         return;
     }
     USER_LOCAL.with(|list| {
@@ -293,6 +335,30 @@ pub fn user_navigation(webview: Option<usize>, url: &str) {
         list.retain(|(_, _, at)| at.elapsed() < EXPECT_WINDOW);
         list.push((host, webview, Instant::now()));
     });
+}
+
+thread_local! {
+    /// Navigationen, die der Browser selbst gerade anstößt (Rechner, WebView, wann).
+    static USER_STARTED: RefCell<Vec<(String, Option<usize>, Instant)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Geht diese Navigation auf den Menschen am Browser zurück – Eingabe,
+/// Lesezeichen, Klick, Formular – und nicht auf ein Skript der Seite?
+unsafe fn started_by_user(action: Obj, webview: usize, url: &str, kind: isize) -> bool {
+    let host = crate::shield::host_of(url);
+    let by_browser = USER_STARTED.with(|list| {
+        list.borrow().iter().any(|(h, w, at)| *h == host && w.is_none_or(|w| w == webview) && at.elapsed() < EXPECT_WINDOW)
+    });
+    if by_browser {
+        return true;
+    }
+    // WebKit weiß, ob ein Klick oder Tastendruck dahintersteht.
+    let knows: bool = msg_send![action, respondsToSelector: sel!(_isUserInitiated)];
+    if knows {
+        return msg_send![action, _isUserInitiated];
+    }
+    // Ohne diese Auskunft: Link und Formular gelten als gewollt, alles andere nicht.
+    matches!(kind, 0 | 1)
 }
 
 fn user_asked_for(webview: usize, host: &str) -> bool {
@@ -591,6 +657,10 @@ extern "C-unwind" fn nav_redirected(_this: Obj, _cmd: Sel, webview: Obj, _nav: O
 }
 
 extern "C-unwind" fn nav_failed_provisional(_this: Obj, _cmd: Sel, webview: Obj, _nav: Obj, error: Obj) {
+    // Der Tab kam nicht an: Die Listen gelten wieder für die Seite, die er zeigt.
+    if !webview.is_null() {
+        unsafe { crate::blocker::revert(webview) };
+    }
     report_failure(webview, error, true);
 }
 
@@ -678,6 +748,86 @@ unsafe fn local_net_refused(action: Obj, webview: Obj, url: &str) -> Option<Stri
     }
 }
 
+/// Antwortet hier ein Server mit einer Weiterleitung auf einen früheren Abruf?
+unsafe fn is_redirect(action: Obj) -> bool {
+    let knows: bool = msg_send![action, respondsToSelector: sel!(_isRedirect)];
+    knows && msg_send![action, _isRedirect]
+}
+
+/// Führt diese Adresse wirklich zu einem Eintrag im Verlauf des Tabs? Beim
+/// Neuladen muss es der aktuelle sein, beim Blättern irgendeiner.
+unsafe fn history_target(webview: Obj, url: &str, kind: isize) -> bool {
+    if webview.is_null() {
+        return false;
+    }
+    let wanted = without_fragment(url);
+    let same = |item: Obj| -> bool {
+        if item.is_null() {
+            return false;
+        }
+        let address: Obj = msg_send![item, URL];
+        let text: Obj = if address.is_null() { std::ptr::null_mut() } else { msg_send![address, absoluteString] };
+        !text.is_null() && length_of(text) <= 16_384 && without_fragment(&string_of(text)) == wanted
+    };
+    let list: Obj = msg_send![webview, backForwardList];
+    if list.is_null() {
+        return false;
+    }
+    let current: Obj = msg_send![list, currentItem];
+    if same(current) {
+        return true;
+    }
+    // Nur „Vor/Zurück“ darf zu einem anderen Eintrag führen.
+    if kind != 2 {
+        return false;
+    }
+    let back: Obj = msg_send![list, backList];
+    let forward: Obj = msg_send![list, forwardList];
+    for items in [back, forward] {
+        if items.is_null() {
+            continue;
+        }
+        let count: usize = msg_send![items, count];
+        for index in 0..count.min(400) {
+            let item: Obj = msg_send![items, objectAtIndex: index];
+            if same(item) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Siegel für Zunders eigene Warn- und Fehlerseiten: eine Zufallszahl je Start,
+/// die jede vom Browser erzeugte Adresse dieser Seiten trägt. Was auf ihnen
+/// steht (welche Seite, welche Warnung, wohin der Knopf führt), kommt aus der
+/// Adresse – also lädt Zunder eine solche Adresse nur, wenn es sie selbst
+/// gebaut hat. Eine Website kennt das Siegel nicht.
+pub fn seal() -> &'static str {
+    static SEAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SEAL.get_or_init(|| {
+        let mut bytes = [0u8; 16];
+        // Ohne Zufall gibt es kein Siegel, das sich erraten ließe – dann lädt gar keine solche Seite.
+        if ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes).is_err() {
+            return String::new();
+        }
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    })
+}
+
+/// Trägt eine interne Warn- oder Fehlerseite das Siegel dieses Starts? Andere
+/// interne Seiten brauchen keines – sie zeigen nichts, was in ihrer Adresse steht.
+fn sealed(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if parsed.host_str() != Some("error") {
+        return true;
+    }
+    let seal = seal();
+    !seal.is_empty() && parsed.query_pairs().any(|(key, value)| key == "z" && value == seal)
+}
+
 /// Sitzt vor der Navigationsentscheidung von wry. Hier entscheidet sich, was
 /// ein Tab überhaupt laden darf:
 ///
@@ -701,7 +851,6 @@ extern "C-unwind" fn nav_policy(
             // WKNavigationType: 0 Link, 1 Formular, 2 Vor/Zurück, 3 Neu laden,
             // 4 Formular erneut, -1 alles andere.
             let kind: isize = msg_send![action, navigationType];
-            let history = matches!(kind, 2..=4);
             let frame: Obj = msg_send![action, targetFrame];
             let new_window = frame.is_null();
             let main: bool = !new_window && msg_send![frame, isMainFrame];
@@ -715,6 +864,12 @@ extern "C-unwind" fn nav_policy(
                 (string_of(text), string_of(method))
             };
             let get = method.is_empty() || method.eq_ignore_ascii_case("GET");
+            // „Im Verlauf geblättert“ oder „neu geladen“ gilt nur für den Abruf,
+            // der wirklich zu einem Eintrag im Verlauf führt. WebKit nennt diese
+            // Art nämlich auch bei jeder Weiterleitung, mit der ein Server auf
+            // einen solchen Abruf antwortet – eine Seite, die sich selbst neu
+            // lädt, käme sonst über ihren Server an den Prüfungen unten vorbei.
+            let history = !new_window && matches!(kind, 2..=4) && !is_redirect(action) && history_target(webview, &url, kind);
             let lower = url.get(..8).unwrap_or(&url).to_ascii_lowercase();
             let web = lower.starts_with("http://") || lower.starts_with("https://");
             let guards = guards_for(webview);
@@ -724,10 +879,16 @@ extern "C-unwind" fn nav_policy(
             // Fenster – und im Tab nur, wenn der Browser selbst sie lädt oder
             // man im Verlauf zu einer zurückkehrt.
             if lower.starts_with("zunder:") {
-                if !(main && (history || internal_expected(&url))) {
+                if !(main && sealed(&url) && (history || internal_expected(&url))) {
                     decide.call((CANCEL,));
                     return;
                 }
+                // Eine eigene Seite des Browsers: Die Listen der Websites gelten dort nicht.
+                crate::blocker::site_changed(webview, &url, false, true);
+            } else if web && unrouted(webview as usize) {
+                // Stealth-Tab ohne Tunnel: Es geht nichts hinaus.
+                decide.call((CANCEL,));
+                return;
             } else if web && (main || new_window) {
                 let flags: usize = msg_send![action, modifierFlags];
                 let button: isize = msg_send![action, buttonNumber];
@@ -736,6 +897,26 @@ extern "C-unwind" fn nav_policy(
                 let middle = button == 4 || button == 2;
                 let in_new_tab = kind == 0 && (command || middle);
 
+                // Anmeldung bei OpenRouter: Der Rücksprung trägt den Einmal-Code.
+                // Er wird hier abgefangen und erreicht nie eine Seite – an der
+                // Adresse lauscht ohnehin nichts.
+                let callback = crate::ai::OAUTH_CALLBACK;
+                let returns = url.strip_prefix(callback).is_some_and(|rest| rest.is_empty() || rest.starts_with('?'));
+                if main && returns && OAUTH.with(std::cell::Cell::get) {
+                    emit_nav(NavKind::OAuthCode { url });
+                    decide.call((CANCEL,));
+                    return;
+                }
+                // Gemeldete Betrugs- und Schadseiten: Davor steht eine Warnung –
+                // gleich ob angeklickt, eingetippt, weitergeleitet oder im Verlauf.
+                // (Was solche Seiten anderswo nachladen wollen, sperrt die
+                // Regelliste; die Seite selbst prüft der Browser hier, weil
+                // WebKit für gesperrte Seiten nicht meldet, welche Liste es war.)
+                if crate::blocker::guard_hit(webview as usize, &url) {
+                    emit_nav(NavKind::Guard { url, in_place: main });
+                    decide.call((CANCEL,));
+                    return;
+                }
                 // Eigenes Netz: Eine Website aus dem Internet schickt niemanden
                 // ungefragt zum Router, zum Drucker oder zu einem Dienst auf
                 // diesem Mac.
@@ -794,7 +975,8 @@ extern "C-unwind" fn nav_policy(
                     }
                     // Der Werbeblocker folgt der Website: Wo er abgeschaltet
                     // ist, hängen die Listen am Tab nicht.
-                    crate::blocker::site_changed(webview, &url, kind == 3);
+                    let by_user = history || started_by_user(action, webview as usize, &url, kind);
+                    crate::blocker::site_changed(webview, &url, kind == 3, by_user);
                 }
             } else if !main && !new_window && !loads_in_frame(&lower) {
                 // Ein eingebetteter Rahmen (Werbung, Widget) startet kein anderes
@@ -814,6 +996,8 @@ extern "C-unwind" fn nav_policy(
             let can_start: bool = msg_send![webview, respondsToSelector: sel!(startDownloadUsingRequest:completionHandler:)];
             let delegate: Obj = msg_send![webview, navigationDelegate];
             if wanted && can_start && !request.is_null() && !delegate.is_null() {
+                // Aus dem Abruf wird ein Download, keine Seite.
+                crate::blocker::revert(webview);
                 let view: Retained<AnyObject> = Retained::retain(webview).expect("WebView lebt");
                 let kept: Retained<AnyObject> = Retained::retain(action).expect("Aktion lebt");
                 let delegate: Retained<AnyObject> = Retained::retain(delegate).expect("Delegate lebt");
@@ -835,6 +1019,185 @@ extern "C-unwind" fn nav_policy(
             }
             None => decide.call((1,)), // WKNavigationActionPolicyAllow
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Seitencheck: Antwortkopf, Verbindung, Merkmale der Cookies
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Was die Server zu den zuletzt geladenen Seiten mitgeschickt haben, je
+    /// WebView. Mehrere, weil beim Zurückgehen im Verlauf keine neue Antwort
+    /// kommt – die Seite steht dann wieder da, ihr Antwortkopf soll es auch.
+    static RESPONSES: RefCell<HashMap<usize, std::collections::VecDeque<crate::sitecheck::Response>>> =
+        RefCell::new(HashMap::new());
+}
+
+static ORIGINAL_RESPONSE: std::sync::OnceLock<Imp> = std::sync::OnceLock::new();
+
+fn without_fragment(url: &str) -> &str {
+    url.split('#').next().unwrap_or(url)
+}
+
+/// Vorposten vor wrys Entscheidung über eine Antwort des Servers: Für den
+/// Hauptrahmen merkt er sich die Zeilen des Antwortkopfs, die der Seitencheck
+/// auswertet. An der Entscheidung selbst ändert er nichts.
+extern "C-unwind" fn nav_response(this: Obj, cmd: Sel, webview: Obj, response: Obj, decide: &Block<dyn Fn(isize)>) {
+    unsafe {
+        if !response.is_null() && !webview.is_null() {
+            let main: bool = msg_send![response, isForMainFrame];
+            let inner: Obj = msg_send![response, response];
+            let http: bool = main && !inner.is_null() && msg_send![inner, isKindOfClass: class!(NSHTTPURLResponse)];
+            // Eine Antwort, aus der keine Seite wird (kein Inhalt, oder ein
+            // Download): Der Tab bleibt, wo er ist – und mit ihm seine Listen.
+            if main {
+                let shows: bool = msg_send![response, canShowMIMEType];
+                let status: isize = if http { msg_send![inner, statusCode] } else { 200 };
+                if !shows || matches!(status, 204 | 205) {
+                    crate::blocker::revert(webview);
+                }
+            }
+            if http {
+                let url: Obj = msg_send![inner, URL];
+                let text: Obj = if url.is_null() { std::ptr::null_mut() } else { msg_send![url, absoluteString] };
+                if !text.is_null() && length_of(text) <= 4096 {
+                    let url = without_fragment(&string_of(text)).to_string();
+                    let mut headers: Vec<(&'static str, String)> = Vec::new();
+                    for name in crate::sitecheck::HEADERS {
+                        let value: Obj = msg_send![inner, valueForHTTPHeaderField: &*ns(name)];
+                        if value.is_null() {
+                            continue;
+                        }
+                        // Mehr als das liest der Check von keiner Zeile: Schutzregeln
+                        // können lang sein, alles andere ist kurz.
+                        let limit = if name.starts_with("content-security-policy") { 16_384 } else { 1_024 };
+                        if length_of(value) > 65_536 {
+                            continue;
+                        }
+                        let mut value = string_of(value);
+                        if value.len() > limit {
+                            let mut end = limit;
+                            while !value.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            value.truncate(end);
+                        }
+                        headers.push((*name, value));
+                    }
+                    RESPONSES.with(|all| {
+                        let mut all = all.borrow_mut();
+                        let list = all.entry(webview as usize).or_default();
+                        list.retain(|old| old.url != url);
+                        list.push_back(crate::sitecheck::Response { url, headers });
+                        while list.len() > 24 {
+                            list.pop_front();
+                        }
+                    });
+                }
+            }
+        }
+        match ORIGINAL_RESPONSE.get() {
+            Some(original) => {
+                let original: PolicyFn = std::mem::transmute(*original);
+                original(this, cmd, webview, response, decide);
+            }
+            None => decide.call((1,)), // WKNavigationResponsePolicyAllow
+        }
+    }
+}
+
+/// Hat diese WebView gerade die Tastatur – ist sie (oder etwas in ihr) im
+/// Fenster das, was Tastendrücke bekommt?
+pub fn has_keyboard(webview: &WebView) -> bool {
+    let w = webview.webview();
+    unsafe {
+        let window: Option<Retained<AnyObject>> = msg_send![&*w, window];
+        let Some(window) = window else {
+            return false;
+        };
+        let responder: Obj = msg_send![&*window, firstResponder];
+        if responder.is_null() {
+            return false;
+        }
+        let view: bool = msg_send![responder, isKindOfClass: class!(NSView)];
+        view && msg_send![responder, isDescendantOf: &*w]
+    }
+}
+
+/// Der Antwortkopf zu der Seite an dieser Adresse, falls er vorliegt.
+pub fn response_for(webview: &WebView, url: &str) -> Option<crate::sitecheck::Response> {
+    let wanted = without_fragment(url);
+    RESPONSES.with(|all| {
+        all.borrow().get(&key(webview)).and_then(|list| list.iter().rev().find(|response| response.url == wanted).cloned())
+    })
+}
+
+/// Räumt auf: Antwortköpfe von WebViews, die es nicht mehr gibt.
+pub fn keep_responses(live: &HashSet<usize>) {
+    RESPONSES.with(|all| all.borrow_mut().retain(|webview, _| live.contains(webview)));
+}
+
+/// Was WebKit über die Verbindung der gezeigten Seite sagt: Kam alles
+/// Gezeigte verschlüsselt an – und lief die Verbindung über TLS 1.0/1.1?
+pub fn connection_facts(webview: &WebView) -> (bool, bool) {
+    let w = webview.webview();
+    unsafe {
+        let only_secure: bool = msg_send![&*w, hasOnlySecureContent];
+        let known: bool = msg_send![&*w, respondsToSelector: sel!(_negotiatedLegacyTLS)];
+        let legacy: bool = known && msg_send![&*w, _negotiatedLegacyTLS];
+        (only_secure, legacy)
+    }
+}
+
+/// Die Merkmale der Cookies, die an diesen Rechner gehen würden – Name und
+/// Schutzmerkmale, nie der Wert. Gefragt wird der Datenspeicher der WebView
+/// selbst; so stimmt es auch in privaten und in Stealth-Fenstern.
+pub fn cookie_flags(webview: &WebView, host: &str, done: impl Fn(Vec<crate::sitecheck::Cookie>) + 'static) {
+    let w = webview.webview();
+    let host = host.to_ascii_lowercase();
+    unsafe {
+        let config: Retained<AnyObject> = msg_send![&*w, configuration];
+        let store: Retained<AnyObject> = msg_send![&*config, websiteDataStore];
+        let jar: Retained<AnyObject> = msg_send![&*store, httpCookieStore];
+        let found = block2::RcBlock::new(move |cookies: *mut AnyObject| {
+            let mut list: Vec<crate::sitecheck::Cookie> = Vec::new();
+            if !cookies.is_null() {
+                let count: usize = msg_send![cookies, count];
+                for index in 0..count.min(20_000) {
+                    let cookie: Obj = msg_send![cookies, objectAtIndex: index];
+                    let domain: Obj = msg_send![cookie, domain];
+                    let name: Obj = msg_send![cookie, name];
+                    if length_of(domain) > 255 || length_of(name) > 512 {
+                        continue;
+                    }
+                    // Mit Punkt davor gilt ein Cookie auch für Unterbereiche, ohne nur für genau diesen Rechner.
+                    let domain = string_of(domain).to_ascii_lowercase();
+                    let fits = match domain.strip_prefix('.') {
+                        Some(parent) => host == parent || host.ends_with(&format!(".{parent}")),
+                        None => host == domain,
+                    };
+                    if !fits {
+                        continue;
+                    }
+                    let secure: bool = msg_send![cookie, isSecure];
+                    let http_only: bool = msg_send![cookie, isHTTPOnly];
+                    let policy: Obj = msg_send![cookie, sameSitePolicy];
+                    let policy = if length_of(policy) > 16 { String::new() } else { string_of(policy).to_ascii_lowercase() };
+                    list.push(crate::sitecheck::Cookie {
+                        name: string_of(name),
+                        secure,
+                        http_only,
+                        same_site: if matches!(policy.as_str(), "lax" | "strict") { policy } else { String::new() },
+                    });
+                    if list.len() >= 200 {
+                        break;
+                    }
+                }
+            }
+            done(list);
+        });
+        let _: () = msg_send![&*jar, getAllCookies: &*found];
     }
 }
 
@@ -1358,6 +1721,20 @@ pub fn install_hooks(existing: &WebView) {
             let _ = ORIGINAL_POLICY.set(previous);
             HOOKS.with(|h| h.borrow_mut().push("decidePolicyForNavigationAction(ersetzt)".into()));
         }
+        // Ebenso die Entscheidung über Antworten: Davor liest der Seitencheck den Antwortkopf mit.
+        let previous = ffi::class_replaceMethod(
+            nav as *const AnyClass as *mut AnyClass,
+            sel!(webView:decidePolicyForNavigationResponse:decisionHandler:),
+            transmute::<PolicyFn, Imp>(nav_response),
+            c"v@:@@@?".as_ptr(),
+        );
+        match previous {
+            Some(previous) => {
+                let _ = ORIGINAL_RESPONSE.set(previous);
+                HOOKS.with(|h| h.borrow_mut().push("decidePolicyForNavigationResponse(ersetzt)".into()));
+            }
+            None => HOOKS.with(|h| h.borrow_mut().push("decidePolicyForNavigationResponse".into())),
+        }
         add_method(
             nav,
             sel!(webView:didStartProvisionalNavigation:),
@@ -1517,6 +1894,13 @@ extern "C-unwind" fn bridge_received(_this: Obj, _cmd: Sel, _controller: Obj, me
             if let Some(host) = body.strip_prefix("x:") {
                 if from_error_page {
                     allow_http(host);
+                }
+                return;
+            }
+            // „Trotzdem öffnen“ auf der Warnung vor einer gemeldeten Betrugsseite.
+            if let Some(host) = body.strip_prefix("g:") {
+                if from_error_page {
+                    crate::blocker::guard_allow(host);
                 }
                 return;
             }
@@ -1911,6 +2295,81 @@ pub fn clear_website_data(tag: u64) {
         // Die Rückmeldung braucht nur, wer auf das Ende wartet (Löschen beim Beenden).
         let done = block2::RcBlock::new(move || emit(UserEvent::DataCleared(tag)));
         let _: () = msg_send![&*store, removeDataOfTypes: &*types, modifiedSince: &*since, completionHandler: &*done];
+    }
+}
+
+/// Welche Websites auf diesem Mac Daten abgelegt haben – je Website die Arten
+/// (`cookies`, `storage`, `cache`). Private und Stealth-Fenster haben eigene,
+/// flüchtige Speicher und tauchen hier nicht auf.
+pub fn site_data(done: impl Fn(Vec<(String, Vec<&'static str>)>) + 'static) {
+    unsafe {
+        let store: Retained<AnyObject> = msg_send![class!(WKWebsiteDataStore), defaultDataStore];
+        let types: Retained<AnyObject> = msg_send![class!(WKWebsiteDataStore), allWebsiteDataTypes];
+        let found = block2::RcBlock::new(move |records: *mut AnyObject| {
+            let mut sites: Vec<(String, Vec<&'static str>)> = Vec::new();
+            if !records.is_null() {
+                let count: usize = msg_send![records, count];
+                for index in 0..count.min(5000) {
+                    let record: Obj = msg_send![records, objectAtIndex: index];
+                    let name: Obj = msg_send![record, displayName];
+                    let kinds: Obj = msg_send![record, dataTypes];
+                    let all: Obj = if kinds.is_null() { std::ptr::null_mut() } else { msg_send![kinds, allObjects] };
+                    let mut found: Vec<&'static str> = Vec::new();
+                    let total: usize = if all.is_null() { 0 } else { msg_send![all, count] };
+                    for position in 0..total {
+                        let kind: Obj = msg_send![all, objectAtIndex: position];
+                        let kind = string_of(kind);
+                        let group = if kind.contains("Cookie") {
+                            "cookies"
+                        } else if kind.contains("Cache") {
+                            "cache"
+                        } else {
+                            "storage"
+                        };
+                        if !found.contains(&group) {
+                            found.push(group);
+                        }
+                    }
+                    found.sort();
+                    let name = string_of(name);
+                    if !name.is_empty() {
+                        sites.push((name.chars().take(253).collect(), found));
+                    }
+                }
+            }
+            sites.sort();
+            done(sites);
+        });
+        let _: () = msg_send![&*store, fetchDataRecordsOfTypes: &*types, completionHandler: &*found];
+    }
+}
+
+/// Löscht alles, was die genannten Websites auf diesem Mac abgelegt haben –
+/// ohne Namen: alles von allen.
+pub fn remove_site_data(names: Vec<String>, done: impl Fn() + Clone + 'static) {
+    unsafe {
+        let store: Retained<AnyObject> = msg_send![class!(WKWebsiteDataStore), defaultDataStore];
+        let types: Retained<AnyObject> = msg_send![class!(WKWebsiteDataStore), allWebsiteDataTypes];
+        let (keep_store, keep_types) = (store.clone(), types.clone());
+        let found = block2::RcBlock::new(move |records: *mut AnyObject| {
+            if records.is_null() {
+                done();
+                return;
+            }
+            let chosen: Retained<AnyObject> = msg_send![class!(NSMutableArray), array];
+            let count: usize = msg_send![records, count];
+            for index in 0..count {
+                let record: Obj = msg_send![records, objectAtIndex: index];
+                let name: Obj = msg_send![record, displayName];
+                if names.is_empty() || names.contains(&string_of(name)) {
+                    let _: () = msg_send![&*chosen, addObject: record];
+                }
+            }
+            let done = done.clone();
+            let finished = block2::RcBlock::new(move || done());
+            let _: () = msg_send![&*keep_store, removeDataOfTypes: &*keep_types, forDataRecords: &*chosen, completionHandler: &*finished];
+        });
+        let _: () = msg_send![&*store, fetchDataRecordsOfTypes: &*types, completionHandler: &*found];
     }
 }
 

@@ -666,6 +666,22 @@
   }
 
   // ------------------------------------------------------------------------
+  // In welcher Sprache die Seite nach eigener Angabe steht. Auch nur ein
+  // Hinweis – danach bietet die Adressleiste das Übersetzen an.
+  // ------------------------------------------------------------------------
+
+  var lastLang = null;
+
+  function checkLang() {
+    var root = document.documentElement;
+    var lang = String((root && root.getAttribute('lang')) || '').toLowerCase().slice(0, 12);
+    if (lang !== lastLang) {
+      lastLang = lang;
+      post({ t: 'lang', v: lang });
+    }
+  }
+
+  // ------------------------------------------------------------------------
   // Start
   // ------------------------------------------------------------------------
 
@@ -673,11 +689,13 @@
   document.addEventListener('DOMContentLoaded', function () {
     scan();
     checkReadable();
+    checkLang();
   });
   window.addEventListener('load', function () {
     sendIcon();
     scan();
     checkReadable();
+    checkLang();
     // Seiten, die ihren Text erst nach dem Laden einsetzen.
     setTimeout(checkReadable, 2500);
   });
@@ -685,7 +703,9 @@
     lastForms = '';
     lastReadable = null;
     readableChecks = 0;
+    lastLang = null;
     scanSoon();
     checkReadable();
+    checkLang();
   });
 })();

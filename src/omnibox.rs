@@ -219,6 +219,18 @@ pub fn error_target(url: &str) -> Option<String> {
     web.then_some(target)
 }
 
+/// Die Adresse, die von einer Fehlerseite aus noch einmal geladen werden darf –
+/// durch „Neu laden“, „Tab duplizieren“ oder die Sitzung vom letzten Mal.
+/// Hinter der Warnung „will in dein eigenes Netz“ steht keine: Dorthin wollte
+/// eine Website, nicht der Mensch am Browser. Dieses Ziel lädt nur der Knopf
+/// auf der Warnseite selbst – sonst wäre ⌘R ein Ja.
+pub fn error_retry(url: &str) -> Option<String> {
+    let target = error_target(url)?;
+    let parsed = url::Url::parse(url).ok()?;
+    let local = parsed.query_pairs().any(|(key, value)| key == "v" && value == "localnet");
+    (!local).then_some(target)
+}
+
 /// Adresse der Seite, deren Quelltext ein Tab zeigt (`zunder://source/?id=…&u=…`).
 pub fn source_target(url: &str) -> Option<String> {
     if !url.starts_with("zunder://source") {
@@ -374,6 +386,12 @@ mod tests {
         assert_eq!(as_url("zunder://newtab/").as_deref(), Some(NEWTAB));
         assert_eq!(error_target("zunder://error/?u=file%3A%2F%2F%2Fetc%2Fpasswd"), None);
         assert_eq!(error_target("zunder://error/?u=data%3Atext%2Fhtml%2Cx"), None);
+        // Neu laden, duplizieren, Sitzung: die Seite hinter einem Ladefehler ja,
+        // das Ziel hinter der Warnung „will in dein eigenes Netz“ nicht.
+        assert_eq!(error_retry("zunder://error/?u=https%3A%2F%2Fbank.de%2F&c=-1003").as_deref(), Some("https://bank.de/"));
+        assert_eq!(error_retry("zunder://error/?v=lookalike&u=https%3A%2F%2Fbank.de%2F").as_deref(), Some("https://bank.de/"));
+        assert_eq!(error_retry("zunder://error/?v=localnet&u=http%3A%2F%2F192.168.1.1%2Fapply&f=x.example"), None);
+        assert_eq!(error_target("zunder://error/?v=localnet&u=http%3A%2F%2F192.168.1.1%2Fapply").as_deref(), Some("http://192.168.1.1/apply"));
         assert_eq!(bar_url("about:blank"), "about:blank");
         assert_eq!(security("https://example.com/"), "secure");
         assert_eq!(security("http://example.com/"), "insecure");

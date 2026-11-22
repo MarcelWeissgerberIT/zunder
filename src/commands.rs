@@ -151,9 +151,20 @@ impl App {
                     // Diesen Tab neben den aktuellen stellen bzw. das beenden.
                     "split" => self.set_split(window, Some(number("id") as u64)),
                     "unsplit" => self.set_split(window, None),
+                    "pin" => self.pin_tab(window, index, true),
+                    "unpin" => self.pin_tab(window, index, false),
+                    "groupNew" => self.group_new(window, index),
+                    "groupAdd" => self.group_set(window, index, Some(number("group").max(0) as u32)),
+                    "groupLeave" => self.group_set(window, index, None),
                     _ => {}
                 }
             }
+            // Tab-Gruppen: auf- und zuklappen, umbenennen, einfärben, auflösen, schließen.
+            "groupToggle" => self.group_toggle(window, number("id").max(0) as u32),
+            "groupName" => self.group_edit(window, number("id").max(0) as u32, Some(&text("name")), None),
+            "groupColor" => self.group_edit(window, number("id").max(0) as u32, None, Some(number("color").clamp(0, 7) as u8)),
+            "groupDissolve" => self.group_dissolve(window, number("id").max(0) as u32),
+            "groupClose" => self.group_close(window, number("id").max(0) as u32),
             "cmd" => self.command(Some(window), &text("id"), target),
             "find" => self.find(window, &text("text"), flag("back")),
             "findClose" => {
@@ -165,8 +176,18 @@ impl App {
                 self.forbid_local_site(&text("site"));
                 self.send_panel(window, "settings", "");
             }
+            // Website-Daten: für eine Website löschen – oder für alle (ohne Namen).
+            "siteDataDelete" => {
+                let site = text("site");
+                let query = text("q");
+                let proxy = self.proxy.clone();
+                let names = if site.is_empty() { Vec::new() } else { vec![site] };
+                native::remove_site_data(names, move || {
+                    let _ = proxy.send_event(UserEvent::SiteDataChanged { window, query: query.clone() });
+                });
+            }
             // Das Schild in der Adresszeile: Werbeblocker für diese Website aus oder an.
-            "blockerSite" => self.set_blocker_for_site(window, flag("off")),
+            "blockerSite" => self.set_blocker_for_site(window, flag("off"), &text("site")),
             // Einstellungen: den Blocker für eine Website wieder einschalten.
             "blockerSiteRemove" => {
                 self.set_site_blocker(&text("site"), false, false);
@@ -261,12 +282,16 @@ impl App {
                 self.notice(window, t(key).to_string(), None, 6000);
             }
             "noticeAction" => {
-                if let Some(action) = self.notices.remove(&(number("id") as u64)) {
+                let notice = number("id") as u64;
+                // Der Knopf gilt nur, solange der Tab noch die Seite zeigt, die gefragt hat.
+                let valid = self.notice_still_valid(notice);
+                if let Some(action) = self.notices.remove(&notice).filter(|_| valid) {
                     match action {
                         NoticeAction::OpenExternal(url) => native::open_external(&url),
                         NoticeAction::Reveal(path) => native::reveal_in_finder(&path),
                         NoticeAction::AllowLocal(tab_window, tab, site) => {
-                            self.allow_local_site(&site);
+                            let private = self.windows.get(&tab_window).is_none_or(|win| win.private || win.stealth);
+                            self.allow_local_site(&site, private);
                             // Sobald die Regeln neu übersetzt sind, lädt der Tab neu.
                             self.reload_when_ready.push((tab_window, tab));
                         }
@@ -290,6 +315,7 @@ impl App {
                                 }
                             }
                         }
+                        NoticeAction::TranslateUndo(tab_window, tab) => self.translate_undo(tab_window, tab),
                         NoticeAction::EnableDevtools => {
                             self.settings.devtools = true;
                             self.store.set_setting("devtools", "1");
@@ -305,6 +331,13 @@ impl App {
             }
             "noticeGone" => {
                 self.notices.remove(&(number("id") as u64));
+                self.notice_owners.remove(&(number("id") as u64));
+            }
+            // Der Seitencheck wird geöffnet: die Seite noch einmal frisch ansehen.
+            "checkRefresh" => {
+                if let Some(tab) = self.windows.get(&window).and_then(|win| win.active_tab()).map(|tab| tab.id) {
+                    self.check_page(window, tab);
+                }
             }
             "drag" => {
                 if let Some(win) = self.windows.get(&window) {
@@ -518,6 +551,8 @@ impl App {
             }
             "fill_login" => self.fill_command(window),
             "reader" => self.toggle_reader(window),
+            "translate_page" => self.translate_page(window),
+            "site_check" => self.show(window, "siteCheck", true),
             "clear_data" => self.show(window, "clearData", true),
             "bookmark_page" => self.toggle_bookmark(window),
             "bookmark_bar" => {
@@ -636,8 +671,10 @@ impl App {
         let Some(tab) = self.windows.get(&window).and_then(|w| w.tabs.get(index)) else {
             return;
         };
-        // Auf der Fehlerseite heißt „neu laden“: die eigentliche Seite erneut versuchen.
-        if let Some(target) = omnibox::error_target(&tab.url) {
+        // Auf der Fehlerseite heißt „neu laden“: die eigentliche Seite erneut
+        // versuchen. Eine Warnung vor dem eigenen Netz lädt dagegen nur sich
+        // selbst neu – über sie hinweg geht es allein mit ihrem Knopf.
+        if let Some(target) = omnibox::error_retry(&tab.url) {
             self.navigate(window, index, &target, false);
             return;
         }
@@ -670,7 +707,8 @@ impl App {
             let Some(win) = self.windows.get(&window) else {
                 return;
             };
-            let Some(victim) = win.tabs.iter().position(|t| t.id != keep_id) else {
+            // Angeheftete Tabs überstehen „Andere schließen“.
+            let Some(victim) = win.tabs.iter().position(|t| t.id != keep_id && !t.pinned) else {
                 return;
             };
             self.close_tab(window, victim);
@@ -689,13 +727,25 @@ impl App {
             return;
         }
         let active_id = win.tabs[win.active].id;
-        let moved = win.tabs.remove(from);
+        let mut moved = win.tabs.remove(from);
+        // Zwischen zwei Tabs derselben Gruppe abgelegt: gehört dazu. Aus der
+        // eigenen Gruppe hinausgezogen: gehört nicht mehr dazu.
+        let left = to.checked_sub(1).and_then(|i| win.tabs.get(i)).and_then(|t| t.group);
+        let right = win.tabs.get(to).and_then(|t| t.group);
+        if !moved.pinned {
+            if left.is_some() && left == right {
+                moved.group = left;
+            } else if moved.group.is_some() && moved.group != left && moved.group != right {
+                moved.group = None;
+            }
+        }
         win.tabs.insert(to, moved);
         win.active = win
             .tabs
             .iter()
             .position(|t| t.id == active_id)
             .unwrap_or(0);
+        win.tidy_tabs();
         win.dirty = true;
         self.session_changed();
     }
@@ -892,6 +942,15 @@ impl App {
     // ----- Seitenleisten ---------------------------------------------------
 
     pub(crate) fn send_panel(&mut self, window: WindowId, name: &str, query: &str) {
+        // Website-Daten kennt nur WebKit – die Liste kommt gleich als Ereignis nach.
+        if name == "sitedata" {
+            let proxy = self.proxy.clone();
+            let query = query.chars().take(100).collect::<String>();
+            native::site_data(move |sites| {
+                let _ = proxy.send_event(UserEvent::SiteData { window, query: query.clone(), sites });
+            });
+            return;
+        }
         let data = match name {
             "history" => json!({ "items": self.store.history_page(query, 400) }),
             "bookmarks" => json!({
@@ -928,6 +987,7 @@ impl App {
                 "blocker": self.settings.blocker,
                 "filters": self.blocker.info(),
                 "filterUpdate": self.settings.filter_update,
+                "guard": self.settings.guard,
                 "blockerOff": self.blocker_off,
                 "saver": self.settings.saver,
                 "engines": ENGINES.iter().map(|e| json!({ "id": e.id, "name": e.name })).collect::<Vec<_>>(),
@@ -1055,6 +1115,16 @@ impl App {
                 self.settings.filter_update = on;
                 self.blocker.auto_update = on;
                 store_flag(&self.store, key);
+            }
+            "guard" => {
+                self.settings.guard = on;
+                self.blocker.guard_enabled = on;
+                store_flag(&self.store, key);
+                self.apply_blocker();
+                // Eingeschaltet: gleich nach den Listen sehen, statt bis zur nächsten Runde zu warten.
+                if on {
+                    self.blocker.refresh(false);
+                }
             }
             _ => return,
         }

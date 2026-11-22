@@ -262,7 +262,8 @@ impl App {
             return;
         }
         let text = t("pw_reuse_warn").replace("{known}", &known).replace("{here}", &here);
-        self.warn(window, text, 25000);
+        // Diese Warnung muss stehen bleiben – auch wenn die Seite gleich darauf etwas auslöst.
+        self.warn_keep(window, text, 25000);
     }
 
     /// Verlangt das Ausfüllen Touch ID? Der Schalter dafür liegt beim Schlüssel
@@ -443,6 +444,14 @@ impl App {
             "readable" => {
                 if tab.readable != flag("on") {
                     tab.readable = flag("on");
+                    win.dirty = true;
+                }
+            }
+            // Was die Seite über ihre Sprache sagt – ein Hinweis, mehr nicht.
+            "lang" => {
+                let lang = text_of(&data, "v", 12).unwrap_or_default();
+                if tab.lang != lang {
+                    tab.lang = lang;
                     win.dirty = true;
                 }
             }

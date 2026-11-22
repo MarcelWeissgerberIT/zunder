@@ -72,6 +72,7 @@ SIZES = {
     "phone": 0.74,
     "folder-plus": 0.74,
     "stealth": 0.74,
+    "translate": 0.78,
 }
 
 SHAPES = {"path", "circle", "ellipse", "line", "rect", "polyline", "polygon"}

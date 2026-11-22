@@ -41,6 +41,21 @@ pub const SOURCES: &[Source] = &[
     Source { name: "easyprivacy", title: "EasyPrivacy", url: "https://easylist.to/easylist/easyprivacy.txt" },
 ];
 
+/// Listen gemeldeter Betrugs- und Schadseiten. Sie liegen der App nicht bei
+/// (sie veralten binnen Stunden) und werden nach dem Start geholt.
+pub const GUARD_SOURCES: &[Source] = &[
+    Source {
+        name: "phishing",
+        title: "Phishing URL Blocklist",
+        url: "https://malware-filter.gitlab.io/malware-filter/phishing-filter.txt",
+    },
+    Source {
+        name: "badware",
+        title: "uBlock filters – Badware risks",
+        url: "https://ublockorigin.github.io/uAssets/filters/badware.txt",
+    },
+];
+
 /// Höchstens so viele Sperren je übersetzter Liste (dazu kommen die Ausnahmen).
 const CHUNK: usize = 40_000;
 
@@ -49,8 +64,21 @@ const CHUNK: usize = 40_000;
 const PREFIX: &str = r"^[htpsw]+://([^:/]+\.)?";
 /// Ein Trennzeichen im Sinn der Listen: alles außer Buchstaben, Ziffern und `_ . % -`.
 const SEP: &str = "[^a-zA-Z0-9_.%-]";
-/// Nach einem vollständigen Rechnernamen: Port oder Pfad.
-const HOST_END: &str = "[:/]";
+/// Grenzen gegen manipulierte Listen. Echte bleiben weit darunter: Die drei
+/// großen zusammen haben einige Tausend Ausnahmen und rund 70.000
+/// Ausblend-Regeln, und keine Regel nennt mehr als ein paar Hundert Websites.
+const MAX_EXCEPTIONS: usize = 60_000;
+const MAX_LIST_RULES: usize = 140_000;
+const MAX_SPARED: usize = 2_000;
+
+/// Port oder Pfad.
+const PORT_OR_PATH: &str = "[:/]";
+/// Ein Punkt, der hinter einem vollständigen Rechnernamen stehen darf:
+/// `beispiel.de.` ist derselbe Rechner wie `beispiel.de`. Ohne ihn käme jede
+/// Adresse mit dieser Schreibweise an den Listen vorbei.
+const ROOT_DOT: &str = r"\.?";
+/// Nach einem vollständigen Rechnernamen: (Punkt,) Port oder Pfad.
+const HOST_END: &str = r"\.?[:/]";
 
 const T_IMAGE: u16 = 1 << 0;
 const T_STYLE: u16 = 1 << 1;
@@ -72,6 +100,8 @@ const T_DOC: u16 = 1 << 11;
 /// einer Adresse, die auf einer Liste steht.
 const T_DEFAULT: u16 =
     T_IMAGE | T_STYLE | T_SCRIPT | T_FONT | T_MEDIA | T_FETCH | T_SOCKET | T_PING | T_OTHER | T_FRAME;
+/// Wirklich alles – auch die Seite selbst und neue Fenster (`$all`).
+const T_ALL: u16 = T_DEFAULT | T_POPUP | T_DOC;
 
 const TYPE_NAMES: &[(u16, &str)] = &[
     (T_IMAGE, "image"),
@@ -210,7 +240,7 @@ fn url_filters(pattern: &str) -> Option<Filters> {
             Some(host) => (host, true),
             None => (body, false),
         };
-        let plain = !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'));
+        let plain = !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
         if plain {
             let mut out = String::with_capacity(PREFIX.len() + host.len() + 12);
             out.push_str(PREFIX);
@@ -234,8 +264,21 @@ fn url_filters(pattern: &str) -> Option<Filters> {
     // wenn die Adresse dort aufhört. Ein „oder“ kennt WebKit nicht – also zwei Muster.
     let tail_sep = !end && body.ends_with('^');
     let core = if tail_sep { &body[..body.len() - 1] } else { body };
+    // `||rechner/pfad`: Wo der Rechnername endet (vor Pfad, Port oder
+    // Trennzeichen), darf der Punkt stehen. Das Muster ist reines ASCII –
+    // Stellen in Bytes und in Zeichen sind dasselbe.
+    let host_end = if matches!(start, Start::Host) {
+        let run = core.bytes().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')).count();
+        let complete = run > 0 && !core[..run].ends_with('.') && matches!(core.as_bytes().get(run), Some(b'/' | b'^' | b':'));
+        complete.then_some(run)
+    } else {
+        None
+    };
     let mut last_star = false;
-    for c in core.chars() {
+    for (index, c) in core.char_indices() {
+        if host_end == Some(index) {
+            out.push_str(ROOT_DOT);
+        }
         match c {
             '*' => {
                 if !last_star {
@@ -290,6 +333,8 @@ pub fn filter_is_safe(filter: &str) -> bool {
             b'\\' => {
                 // Nur Satzzeichen dürfen so geschützt sein – `\d`, `\w`, `\b` gibt es nicht.
                 match bytes.get(i + 1) {
+                    // Der Punkt hinter einem Rechnernamen – das einzige „vielleicht“ in den Mustern.
+                    Some(b'.') if bytes.get(i + 2) == Some(&b'?') => i += ROOT_DOT.len(),
                     Some(next) if next.is_ascii_punctuation() => i += 2,
                     _ => return false,
                 }
@@ -297,8 +342,8 @@ pub fn filter_is_safe(filter: &str) -> bool {
             b'[' => {
                 if rest[i..].starts_with(SEP) {
                     i += SEP.len();
-                } else if rest[i..].starts_with(HOST_END) {
-                    i += HOST_END.len();
+                } else if rest[i..].starts_with(PORT_OR_PATH) {
+                    i += PORT_OR_PATH.len();
                 } else {
                     return false;
                 }
@@ -393,8 +438,31 @@ fn type_bit(name: &str) -> Option<u16> {
     })
 }
 
+/// Besteht der Adressteil nur aus einem Rechnernamen (`||beispiel.de^`)?
+fn host_only(pattern: &str) -> bool {
+    let Some(rest) = pattern.strip_prefix("||") else {
+        return false;
+    };
+    let host = rest.strip_suffix('^').unwrap_or(rest);
+    host.contains('.') && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
+/// Eine Zeile, die nur aus einem Rechnernamen oder einer IP-Adresse besteht –
+/// so führen Listen gemeldeter Betrugsseiten ganze Rechner.
+fn host_line(line: &str) -> bool {
+    line.len() <= 253
+        && line.contains('.')
+        && !line.starts_with(['.', '-'])
+        && !line.ends_with(['.', '-'])
+        && line.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'_'))
+}
+
 /// Liest eine Sperr- oder Ausnahmeregel. `None`: nicht genau ausdrückbar.
-fn parse_net(line: &str) -> Option<Net> {
+///
+/// `guard`: Die Zeile stammt aus einer Liste gemeldeter Betrugs- und
+/// Schadseiten. Dort heißt ein bloßer Rechnername ohne weitere Angabe: der
+/// ganze Rechner, auch als Seite – nicht nur, was andere Seiten von ihm nachladen.
+fn parse_net(line: &str, guard: bool) -> Option<Net> {
     let (exception, body) = match line.strip_prefix("@@") {
         Some(rest) => (true, rest),
         None => (false, line),
@@ -435,6 +503,7 @@ fn parse_net(line: &str) -> Option<Net> {
             ("csp", None) if exception && !negated => {}
             ("document" | "doc", None) if exception && !negated => whole_page = true,
             ("object" | "object-subrequest", None) => unknown_type |= !negated,
+            ("all", None) if !negated => plus |= T_ALL,
             (name, None) => match type_bit(name) {
                 Some(bit) if negated => minus |= bit,
                 Some(bit) => plus |= bit,
@@ -448,6 +517,8 @@ fn parse_net(line: &str) -> Option<Net> {
         plus & !minus
     } else if unknown_type && minus == 0 {
         0
+    } else if guard && !exception && minus == 0 && host_only(pattern) {
+        T_ALL
     } else {
         T_DEFAULT & !minus
     };
@@ -772,6 +843,212 @@ fn join(rules: &[&[String]]) -> String {
 
 // ---------------------------------------------------------------------------
 
+/// Verzeichnis der gemeldeten Betrugs- und Schadseiten, soweit ganze Seiten
+/// gemeint sind – damit der Browser selbst vor dem Öffnen warnen kann.
+#[derive(Default, Debug)]
+pub struct GuardIndex {
+    /// Ganze Rechner (gilt auch für ihre Unterrechner).
+    hosts: HashSet<String>,
+    /// Einzelne Adressen: Rechner → Anfänge von Pfad und Abfrage.
+    paths: HashMap<String, Vec<String>>,
+}
+
+impl GuardIndex {
+    pub fn len(&self) -> usize {
+        self.hosts.len() + self.paths.values().map(Vec::len).sum::<usize>()
+    }
+
+    /// Steht diese Adresse als ganze Seite auf einer der Listen?
+    pub fn matches(&self, url: &str) -> bool {
+        let Ok(parsed) = url::Url::parse(url) else {
+            return false;
+        };
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return false;
+        }
+        let Some(host) = guard_host(&parsed) else {
+            return false;
+        };
+        // Der Rechner selbst oder einer, unter dem er hängt.
+        let mut rest = host.as_str();
+        loop {
+            if self.hosts.contains(rest) {
+                return true;
+            }
+            match rest.split_once('.') {
+                Some((_, parent)) if parent.contains('.') => rest = parent,
+                _ => break,
+            }
+        }
+        let Some(prefixes) = self.paths.get(&host) else {
+            return false;
+        };
+        let mut tail = parsed.path().to_string();
+        if let Some(query) = parsed.query() {
+            tail.push('?');
+            tail.push_str(query);
+        }
+        let tail = plain_escapes(&tail);
+        prefixes.iter().any(|prefix| {
+            tail.strip_prefix(prefix.as_str()).is_some_and(|after| {
+                // Danach muss die Adresse enden oder ein Trennzeichen folgen.
+                after.chars().next().is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '%')))
+            })
+        })
+    }
+}
+
+/// Der Rechnername, wie er in den Listen steht: klein, ohne den Punkt am Ende
+/// (`beispiel.de.` ist derselbe Rechner), und eine IPv4-Adresse im IPv6-Kleid
+/// (`[::ffff:1.2.3.4]`) als die IPv4-Adresse, die sie ist.
+pub fn guard_host(url: &url::Url) -> Option<String> {
+    match url.host()? {
+        url::Host::Domain(name) => {
+            let name = name.trim_end_matches('.').to_ascii_lowercase();
+            (!name.is_empty()).then_some(name)
+        }
+        url::Host::Ipv4(address) => Some(address.to_string()),
+        url::Host::Ipv6(address) => Some(match address.to_ipv4_mapped() {
+            Some(inner) => inner.to_string(),
+            None => format!("[{address}]"),
+        }),
+    }
+}
+
+/// Gleicht aus, was sich in einer Adresse verschieden schreiben lässt, ohne
+/// dass es etwas anderes bedeutet: `%70` ist ein `p`. Verschlüsselt geschrieben
+/// bleiben nur Zeichen, die es sein müssen – die dann mit Großbuchstaben.
+fn plain_escapes(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if let (b'%', Some(high), Some(low)) = (bytes[i], bytes.get(i + 1).copied().and_then(hex), bytes.get(i + 2).copied().and_then(hex)) {
+            let value = (high * 16 + low) as u8;
+            if value.is_ascii_alphanumeric() || matches!(value, b'-' | b'.' | b'_' | b'~') {
+                out.push(value as char);
+            } else {
+                out.push_str(&format!("%{value:02X}"));
+            }
+            i += 3;
+        } else {
+            // Die Stelle ist ein ganzes Zeichen oder dessen Anfang – bis zur nächsten Zeichengrenze übernehmen.
+            let mut end = i + 1;
+            while !text.is_char_boundary(end) {
+                end += 1;
+            }
+            out.push_str(&text[i..end]);
+            i = end;
+        }
+    }
+    out
+}
+
+/// Steht diese Domain – oder eine, unter der sie hängt – in der Menge?
+fn covered(sites: &HashSet<String>, domain: &str) -> bool {
+    let mut rest = domain;
+    loop {
+        if sites.contains(rest) {
+            return true;
+        }
+        match rest.split_once('.') {
+            Some((_, parent)) => rest = parent,
+            None => return false,
+        }
+    }
+}
+
+/// Baut das Verzeichnis aus den Listen. Aufgenommen wird nur, was eindeutig
+/// eine ganze Seite meint: bloße Rechnernamen sowie Adressen mit `$all` oder
+/// `$doc` – ohne Platzhalter und ohne weitere Bedingungen.
+pub fn guard_index(texts: &[&str]) -> GuardIndex {
+    let mut index = GuardIndex::default();
+    for text in texts {
+        for raw in text.lines() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('!') || line.starts_with('[') || line.starts_with('@') || line.len() > 2000 {
+                continue;
+            }
+            if host_line(line) {
+                index.hosts.insert(line.to_string());
+                continue;
+            }
+            let Some(rest) = line.strip_prefix("||") else {
+                continue;
+            };
+            let (pattern, options) = split_options(rest);
+            let whole_page = options.split(',').all(|option| matches!(option, "all" | "doc" | "document"));
+            if !options.is_empty() && !whole_page {
+                continue;
+            }
+            let pattern = pattern.strip_suffix('^').unwrap_or(pattern);
+            if pattern.contains(['*', '^', '|']) || !pattern.is_ascii() {
+                continue;
+            }
+            match pattern.split_once('/') {
+                None if options.is_empty() || whole_page => {
+                    if host_line(&pattern.to_ascii_lowercase()) {
+                        index.hosts.insert(pattern.to_ascii_lowercase());
+                    }
+                }
+                // Eine einzelne Adresse zählt nur, wenn die Liste ausdrücklich die Seite meint.
+                Some((host, path)) if whole_page && host_line(&host.to_ascii_lowercase()) => {
+                    let entry = index.paths.entry(host.to_ascii_lowercase()).or_default();
+                    if entry.len() < 2000 {
+                        entry.push(plain_escapes(&format!("/{path}")));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    index
+}
+
+/// Übersetzt Listen gemeldeter Betrugs- und Schadseiten: nur Sperren und
+/// ihre Ausnahmen, nichts wird ausgeblendet.
+pub fn convert_guard(texts: &[&str], compat: bool) -> Converted {
+    let mut stats = Stats::default();
+    let mut blocks: Vec<String> = Vec::new();
+    let mut exceptions: Vec<String> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for text in texts {
+        for raw in text.lines() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('!') || line.starts_with('[') || line.starts_with('#') || line.len() > 2000 {
+                continue;
+            }
+            if !seen.insert(line) {
+                continue;
+            }
+            let rule = if host_line(line) {
+                parse_net(&format!("||{line}^"), true)
+            } else if cosmetic(line).is_some() {
+                None
+            } else {
+                parse_net(line, true)
+            };
+            // Ausnahmen für ganze Seiten oder fürs Ausblenden gibt es hier nicht.
+            match rule.filter(|net| net.unhide == Unhide::No && !net.whole_page) {
+                None => stats.skipped += 1,
+                Some(net) if net.exception => {
+                    let before = exceptions.len();
+                    push_net(&mut exceptions, &net, net.types, "ignore-previous-rules", compat);
+                    stats.exceptions += exceptions.len() - before;
+                }
+                Some(net) => {
+                    let before = blocks.len();
+                    push_net(&mut blocks, &net, net.types, "block", compat);
+                    stats.blocking += blocks.len() - before;
+                }
+            }
+        }
+    }
+    let lists = blocks.chunks(CHUNK).map(|part| join(&[part, &exceptions])).collect();
+    Converted { lists, stats }
+}
+
 /// Übersetzt die Listen. Die erste Ergebnisliste blendet aus, die übrigen sperren.
 pub fn convert(texts: &[&str], compat: bool) -> Converted {
     let mut stats = Stats::default();
@@ -823,11 +1100,14 @@ pub fn convert(texts: &[&str], compat: bool) -> Converted {
                         entry.clear();
                         entry.insert(String::new());
                     } else if !entry.contains("") {
-                        entry.extend(domains.include);
+                        // Mehr Ausnahmen je Regel führt keine echte Liste – eine
+                        // manipulierte soll den Übersetzer damit nicht aufhalten.
+                        let room = MAX_SPARED.saturating_sub(entry.len());
+                        entry.extend(domains.include.into_iter().take(room));
                     }
                 }
                 Some(Cosmetic::Unsupported) => stats.skipped += 1,
-                None => match parse_net(line) {
+                None => match parse_net(line, false) {
                     None => stats.skipped += 1,
                     Some(net) if net.exception => {
                         let before = exceptions.len() + whole_pages.len() + unhide_generic.len() + unhide_all.len();
@@ -893,28 +1173,40 @@ pub fn convert(texts: &[&str], compat: bool) -> Converted {
         let include: Vec<String> = match spared.get(selector) {
             None => include.clone(),
             Some(sites) if sites.contains("") => Vec::new(),
-            Some(sites) => include
-                .iter()
-                .filter(|entry| {
-                    let domain = entry.trim_start_matches('*');
-                    !sites.iter().any(|site| domain == site || domain.ends_with(&format!(".{site}")))
-                })
-                .flat_map(|entry| {
-                    // Eine Ausnahme für x.a.de: Dann gilt die Regel nur auf a.de selbst.
-                    let domain = entry.trim_start_matches('*');
-                    let inner = entry.starts_with('*') && sites.iter().any(|site| site.ends_with(&format!(".{domain}")));
-                    match inner {
-                        true => vec![domain.to_string()],
-                        false => vec![entry.clone()],
-                    }
-                })
-                .collect(),
+            Some(sites) => {
+                // Alles, worunter eine ausgenommene Website hängt (`x.a.de` → `a.de`, `de`).
+                let above: HashSet<&str> = sites
+                    .iter()
+                    .flat_map(|site| site.match_indices('.').map(move |(dot, _)| &site[dot + 1..]))
+                    .collect();
+                include
+                    .iter()
+                    .filter(|entry| !covered(sites, entry.trim_start_matches('*')))
+                    .map(|entry| {
+                        // Eine Ausnahme für x.a.de: Dann gilt die Regel nur auf a.de selbst.
+                        let domain = entry.trim_start_matches('*');
+                        match entry.starts_with('*') && above.contains(domain) {
+                            true => domain.to_string(),
+                            false => entry.clone(),
+                        }
+                    })
+                    .collect()
+            }
         };
         if !include.is_empty() {
             push_hide(&mut hide_specific, selector, &include, &[]);
         }
     }
     stats.hiding = hide_open.len() + hide_limited.len() + hide_specific.len();
+
+    // WebKit nimmt je Liste höchstens 150.000 Regeln. Die Ausnahmen stehen in
+    // jedem Teil noch einmal – wären es so viele, dass ein Teil die Grenze
+    // reißt, ist das keine der Listen, für die dieser Übersetzer gemacht ist.
+    // Dann wird gar nichts übernommen, und es bleibt bei den Listen von vorher.
+    let hide_rules = stats.hiding + unhide_generic.len() + unhide_all.len() + whole_pages.len();
+    if exceptions.len() + whole_pages.len() > MAX_EXCEPTIONS || hide_rules > MAX_LIST_RULES {
+        return Converted { lists: Vec::new(), stats };
+    }
 
     let mut lists = Vec::new();
     if stats.hiding > 0 {
@@ -926,13 +1218,63 @@ pub fn convert(texts: &[&str], compat: bool) -> Converted {
     Converted { lists, stats }
 }
 
-/// Der Stand einer Liste, wie ihn die Kopfzeile nennt (`! Version: 202611220546`).
+/// Der Stand einer Liste, wie ihn die Kopfzeile nennt – als Ziffernfolge, die
+/// sich vergleichen lässt (`! Version: 202611220546`, `! Updated:
+/// 2026-11-22T00:03:04Z`, `! Last modified: Thu, 19 Nov 2026 19:00:23 +0000`).
 pub fn stamp(text: &str) -> Option<String> {
-    text.lines().take(40).find_map(|line| {
-        let value = line.strip_prefix("! Version:")?.trim();
-        let plausible = (8..=14).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_digit());
-        plausible.then(|| value.to_string())
-    })
+    stamp_before(text, &day_digits(2))
+}
+
+/// Das Datum in `ahead` Tagen als acht Ziffern (`20261124`), nach der Uhr des Macs.
+fn day_digits(ahead: u64) -> String {
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    // Tage seit 1970 in Jahr, Monat, Tag (bürgerlicher Kalender).
+    let z = (seconds / 86_400 + ahead) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}{month:02}{day:02}")
+}
+
+/// Wie `stamp`, mit dem spätesten Datum, das noch gilt (acht Ziffern). Ein
+/// Stand „aus der Zukunft“ wird nicht geglaubt: Eine einzige untergeschobene
+/// Liste mit einem Fantasie-Datum gälte sonst für immer als die neueste –
+/// neuer als jede echte, die danach käme.
+fn stamp_before(text: &str, latest_day: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    let plausible = |value: &str| {
+        (8..=14).contains(&value.len())
+            && value.bytes().all(|b| b.is_ascii_digit())
+            && &value[..8] >= "20150101"
+            && &value[..8] <= latest_day
+    };
+    let head: Vec<&str> = text.lines().take(40).collect();
+    let field = |name: &str| head.iter().find_map(|line| line.strip_prefix(name).map(str::trim));
+    if let Some(value) = field("! Version:").filter(|value| plausible(value)) {
+        return Some(value.to_string());
+    }
+    if let Some(value) = field("! Updated:") {
+        let digits: String = value.chars().filter(char::is_ascii_digit).take(14).collect();
+        if value.len() >= 10 && value.as_bytes()[4] == b'-' && plausible(&digits) {
+            return Some(digits);
+        }
+    }
+    // „Thu, 19 Nov 2026 19:00:23 +0000“
+    let value = field("! Last modified:")?;
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    let [_, day, month, year, time, ..] = parts.as_slice() else {
+        return None;
+    };
+    let month = MONTHS.iter().position(|name| month.to_ascii_lowercase().starts_with(name))? + 1;
+    let day: u32 = day.parse().ok()?;
+    let clock: String = time.chars().filter(char::is_ascii_digit).take(6).collect();
+    let digits = format!("{year}{month:02}{day:02}{clock}");
+    plausible(&digits).then_some(digits)
 }
 
 /// Sieht der Text nach einer vollständigen Filterliste aus? Abgeschnittene
@@ -941,7 +1283,7 @@ pub fn plausible(text: &str) -> bool {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     text.len() >= 20_000
         && text.len() <= 12_000_000
-        && text.starts_with("[Adblock")
+        && (text.starts_with("[Adblock") || text.starts_with("! Title:"))
         && stamp(text).is_some()
         && text.lines().filter(|line| !line.starts_with('!')).take(1000).count() == 1000
 }
@@ -959,7 +1301,7 @@ mod tests {
     fn domain_rules_spare_the_page_itself_and_new_windows() {
         let rules = only("||werbung.example^");
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0]["trigger"]["url-filter"], r"^[htpsw]+://([^:/]+\.)?werbung\.example[:/]");
+        assert_eq!(rules[0]["trigger"]["url-filter"], r"^[htpsw]+://([^:/]+\.)?werbung\.example\.?[:/]");
         let types: Vec<&str> =
             rules[0]["trigger"]["resource-type"].as_array().unwrap().iter().map(|t| t.as_str().unwrap()).collect();
         assert!(types.contains(&"script") && types.contains(&"child-document"));
@@ -1068,7 +1410,7 @@ mod tests {
         assert_eq!(net[0]["action"]["type"], "block");
         assert_eq!(net[1]["action"]["type"], "ignore-previous-rules");
         assert_eq!(net[1]["trigger"]["resource-type"], serde_json::json!(["script"]));
-        assert!(net[2]["trigger"]["if-top-url"][0].as_str().unwrap().ends_with("g\\.example[:/].*"));
+        assert!(net[2]["trigger"]["if-top-url"][0].as_str().unwrap().ends_with("g\\.example\\.?[:/].*"));
         assert_eq!(converted.stats, Stats { blocking: 1, exceptions: 4, hiding: 4, skipped: 0 });
     }
 
@@ -1089,7 +1431,7 @@ mod tests {
     fn only_safe_patterns_pass() {
         for good in [
             ".*",
-            r"^[htpsw]+://([^:/]+\.)?a\.example[:/]",
+            r"^[htpsw]+://([^:/]+\.)?a\.example\.?[:/]",
             r"^[htpsw]+://([^:/]+\.)?a\.example/x.*y[^a-zA-Z0-9_.%-]",
             r"/ads/.*\?id=",
             r"^https://a\.example/x$",
@@ -1118,9 +1460,126 @@ mod tests {
     }
 
     #[test]
+    fn stamps_from_the_future_are_not_believed() {
+        let list = |version: &str| format!("[Adblock Plus 2.0]\n! Version: {version}\n");
+        assert_eq!(stamp_before(&list("202611220546"), "20261124").as_deref(), Some("202611220546"));
+        assert_eq!(stamp_before(&list("20261124235959"), "20261124").as_deref(), Some("20261124235959"));
+        // Ein Fantasie-Datum gälte sonst für immer als das neueste.
+        assert_eq!(stamp_before(&list("99999999999999"), "20261124"), None);
+        assert_eq!(stamp_before(&list("202611250000"), "20261124"), None);
+        assert_eq!(stamp_before(&list("19990101"), "20261124"), None);
+        assert_eq!(stamp_before("! Updated: 2031-01-01T00:00:00Z\n", "20261124"), None);
+        // Das Datum nach der Uhr des Macs: acht Ziffern, und übermorgen liegt nicht vor heute.
+        assert!(day_digits(0).len() == 8 && day_digits(0).bytes().all(|b| b.is_ascii_digit()));
+        assert!(day_digits(2) >= day_digits(0));
+
+        let sites: HashSet<String> = ["a.example".to_string()].into_iter().collect();
+        assert!(covered(&sites, "a.example") && covered(&sites, "x.y.a.example"));
+        assert!(!covered(&sites, "ba.example") && !covered(&sites, "example") && !covered(&sites, ""));
+    }
+
+    #[test]
+    fn a_dot_after_the_host_name_changes_nothing() {
+        // `beispiel.de.` ist derselbe Rechner wie `beispiel.de` – die Muster nehmen den Punkt hin.
+        let closed = url_filters("||listed.example^").unwrap().list;
+        assert_eq!(closed, vec![r"^[htpsw]+://([^:/]+\.)?listed\.example\.?[:/]".to_string()]);
+        let path = url_filters("||listed.example/login").unwrap().list;
+        assert_eq!(path, vec![r"^[htpsw]+://([^:/]+\.)?listed\.example\.?/login".to_string()]);
+        let sep = url_filters("||listed.example^track").unwrap().list;
+        assert_eq!(sep, vec![format!(r"^[htpsw]+://([^:/]+\.)?listed\.example\.?{SEP}track")]);
+        // Kein vollständiger Name (Platzhalter folgt) – dann auch kein Punkt.
+        let open = url_filters("||ads.example*banner").unwrap().list;
+        assert_eq!(open, vec![r"^[htpsw]+://([^:/]+\.)?ads\.example.*banner".to_string()]);
+        for filter in closed.iter().chain(&path).chain(&sep).chain(&open) {
+            assert!(filter_is_safe(filter), "{filter}");
+        }
+        // Ein „vielleicht“ anderswo bleibt verboten.
+        assert!(!filter_is_safe(r"^[htpsw]+://([^:/]+\.)?a\.b/x?"));
+        assert!(!filter_is_safe(r"abc\/?def"));
+
+        let index = guard_index(&["||listed.example^\n||forms.example/pfad/x^$doc\n1.2.3.4\n"]);
+        for url in [
+            "https://listed.example/login",
+            "https://listed.example./login",
+            "https://sub.LISTED.example.:8443/",
+            "https://forms.example/pfad/x",
+            "https://forms.example./%70fad/x?y=1",
+            "http://1.2.3.4/",
+            "http://[::ffff:1.2.3.4]/",
+        ] {
+            assert!(index.matches(url), "{url}");
+        }
+        for url in ["https://forms.example/pfad/xy", "https://forms.example/anders", "https://notlisted.example./", "https://example./"] {
+            assert!(!index.matches(url), "{url}");
+        }
+        assert_eq!(plain_escapes("/%70fad/%2fx/%zz/ä%e4"), "/pfad/%2Fx/%zz/ä%E4");
+    }
+
+    #[test]
+    fn reported_scam_sites_block_the_whole_host() {
+        let text = "! Title: Probe\nboese.example\n10.20.30.40\n||teil.example/pfad/x^$all\n||warnung.example^$doc\n||nachladen.example/skript.js\n||ganz.example^\n@@||ganz.example/erlaubt^\nmit_unterstrich.example\n||ziel.example^$doc,to=~gut.example\nboese.example##.x\n";
+        let converted = convert_guard(&[text], false);
+        assert_eq!(converted.lists.len(), 1);
+        let rules: Vec<serde_json::Value> = serde_json::from_str(&converted.lists[0]).unwrap();
+        let types = |index: usize| -> Vec<String> {
+            rules[index]["trigger"]["resource-type"].as_array().unwrap().iter().map(|t| t.as_str().unwrap().to_string()).collect()
+        };
+        // Bloßer Rechnername: alles, auch die Seite selbst und neue Fenster.
+        assert_eq!(rules[0]["trigger"]["url-filter"], r"^[htpsw]+://([^:/]+\.)?boese\.example\.?[:/]");
+        assert!(types(0).contains(&"top-document".to_string()) && types(0).contains(&"popup".to_string()));
+        assert!(rules[1]["trigger"]["url-filter"].as_str().unwrap().contains(r"10\.20\.30\.40"));
+        // $all bei einer einzelnen Adresse – zweimal, weil sie auch am Adressende greift.
+        assert!(types(2).contains(&"top-document".to_string()) && types(2).contains(&"script".to_string()));
+        assert_eq!(rules[3]["trigger"]["url-filter"], r"^[htpsw]+://([^:/]+\.)?teil\.example\.?/pfad/x$");
+        // $doc: nur die Seite.
+        assert_eq!(types(4), ["top-document"]);
+        // Eine Adresse mit Pfad ohne Angabe: nur, was Seiten nachladen.
+        assert!(!types(5).contains(&"top-document".to_string()) && types(5).contains(&"script".to_string()));
+        assert!(types(6).contains(&"top-document".to_string()));
+        // Auch Namen mit Unterstrich sind Rechnernamen.
+        assert!(types(7).contains(&"top-document".to_string()));
+        // Die Ausnahme steht am Ende; Unausdrückbares und Ausblend-Regeln fehlen.
+        assert_eq!(rules.len(), 10);
+        assert_eq!(rules[8]["action"]["type"], "ignore-previous-rules");
+        assert_eq!(converted.stats, Stats { blocking: 8, exceptions: 2, hiding: 0, skipped: 2 });
+        // In einer Werbeliste hieße dieselbe Zeile etwas anderes: dort nie die Seite selbst.
+        let ads = convert(&["||ganz.example^"], false);
+        assert!(!ads.lists[0].contains("top-document"));
+
+        // Dasselbe als Verzeichnis für die Warnung vor dem Öffnen.
+        let index = guard_index(&[text]);
+        for hit in [
+            "https://boese.example/",
+            "http://www.tief.boese.example/anmelden?x=1",
+            "https://10.20.30.40/x",
+            "https://teil.example/pfad/x",
+            "https://teil.example/pfad/x?weiter=1",
+            "https://warnung.example/irgendwas",
+            "https://ganz.example/",
+        ] {
+            assert!(index.matches(hit), "{hit}");
+        }
+        for miss in [
+            "https://harmlos.example/",
+            "https://nichtboese.example/",           // nur an der Punktgrenze
+            "https://teil.example/pfad/xy",          // andere Adresse auf demselben Rechner
+            "https://teil.example/",
+            "https://nachladen.example/skript.js",   // meint nur das Nachladen
+            "https://ziel.example/",                 // hatte eine Bedingung, die sich nicht prüfen lässt
+            "ftp://boese.example/",
+            "kein url",
+        ] {
+            assert!(!index.matches(miss), "{miss}");
+        }
+    }
+
+    #[test]
     fn list_headers() {
         let head = "[Adblock Plus 2.0]\n! Version: 202611220546\n! Title: EasyList\n";
         assert_eq!(stamp(head).as_deref(), Some("202611220546"));
+        assert_eq!(stamp("! Title: x\n! Updated: 2026-11-22T00:03:04Z\n").as_deref(), Some("20261122000304"));
+        assert_eq!(stamp("! Title: x\n! Last modified: Thu, 19 Nov 2026 19:00:23 +0000\n").as_deref(), Some("20261119190023"));
+        assert_eq!(stamp("! Last modified: irgendwann\n"), None);
         assert_eq!(stamp("! Version: <script>"), None);
         assert!(!plausible(head));
         assert!(!plausible("<html>Fehler</html>"));
@@ -1202,6 +1661,17 @@ mod tests {
         let texts: Vec<String> =
             SOURCES.iter().map(|s| std::fs::read_to_string(dir.join(format!("{}.txt", s.name))).unwrap()).collect();
         let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        // Dazu die Listen gemeldeter Betrugsseiten, falls sie im Ordner liegen.
+        let guard: Vec<String> = GUARD_SOURCES.iter().filter_map(|s| std::fs::read_to_string(out.join(format!("{}.txt", s.name))).ok()).collect();
+        if !guard.is_empty() {
+            let guard_refs: Vec<&str> = guard.iter().map(String::as_str).collect();
+            let started = std::time::Instant::now();
+            let converted = convert_guard(&guard_refs, false);
+            println!("schutz: {:?} in {:?}", converted.stats, started.elapsed());
+            for (index, list) in converted.lists.iter().enumerate() {
+                std::fs::write(out.join(format!("schutz-{index}.json")), list).unwrap();
+            }
+        }
         for (compat, tag) in [(false, "neu"), (true, "alt")] {
             let started = std::time::Instant::now();
             let converted = convert(&refs, compat);

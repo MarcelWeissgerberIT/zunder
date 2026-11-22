@@ -273,6 +273,9 @@ pub fn build_content(
     url: Option<&str>,
     config: Option<Retained<WKWebViewConfiguration>>,
 ) -> wry::Result<WebView> {
+    // Ließ sich der Tunnel für diesen Tab nicht einrichten, lädt er gar nichts
+    // – lieber keine Seite als eine, die am Tunnel vorbeigeht.
+    let unrouted = std::cell::Cell::new(false);
     let config = config.unwrap_or_else(|| {
         if !shared.stealth {
             return native::content_config(shared.store.as_deref(), &shared.ua_suffix, false);
@@ -280,7 +283,8 @@ pub fn build_content(
         // Stealth: eine eigene Insel je Tab – und ihr Verkehr durch den Tunnel.
         let island = native::private_store();
         if let Some(route) = &shared.route {
-            native::route_store(&island, &route.host, route.port, &format!("zunder-{tab}"));
+            let routed = native::route_store(&island, &route.host, route.port, &format!("zunder-{tab}"));
+            unrouted.set(!routed);
         }
         native::content_config(Some(&island), &shared.ua_suffix, true)
     });
@@ -379,6 +383,10 @@ pub fn build_content(
         .with_back_forward_navigation_gestures(true)
         .with_autoplay(false)
         .with_accept_first_mouse(true)
+        // Keine Link-Vorschau beim kräftigen Klick: Sie lädt die Adresse in
+        // einer eigenen Ansicht – vorbei an den Prüfungen beim Navigieren, an
+        // den Listen und, im Stealth-Fenster, am Tunnel.
+        .with_allow_link_preview(false)
         // „Element untersuchen“ gibt es nur, wenn es in den Einstellungen
         // eingeschaltet ist: Mit ihm könnten auch Safaris Entwicklerwerkzeuge
         // in jede Seite hineinsehen.
@@ -393,6 +401,9 @@ pub fn build_content(
         // alle Schutzschalter und der Blocker, gleich was sonst eingestellt ist.
         let key = native::key(&webview);
         native::mark_stealth(key);
+        if unrouted.get() {
+            native::mark_unrouted(key);
+        }
         crate::blocker::force(key);
     }
     Ok(webview)

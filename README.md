@@ -20,6 +20,10 @@ Damit läuft das heutige Web vollständig, und die App startet sofort.
   Tab immer zu sehen ist. **Alle Tabs zeigen** (⇧⌘\) legt sie als Karten mit
   Vorschaubild nebeneinander – durchsuchbar, mit einem Klick gewechselt oder
   geschlossen.
+- **Angeheftete Tabs und Tab-Gruppen**: Ein angehefteter Tab steht schmal
+  ganz links und ist nach jedem Start wieder da. Gruppen fassen Tabs unter
+  einem farbigen Namen zusammen und lassen sich zusammenklappen – siehe
+  [Tabs ordnen](#tabs-ordnen).
 - **Adressleiste**: erkennt Adresse oder Suche, vervollständigt aus dem
   Verlauf, schlägt offene Tabs, Lesezeichen, Verlauf und Suchbegriffe vor.
   Sechs Suchmaschinen zur Wahl.
@@ -36,6 +40,16 @@ Damit läuft das heutige Web vollständig, und die App startet sofort.
   und nach Touch ID aus und schlägt sichere Passwörter vor – siehe unten.
 - **Lesemodus** (⌥⌘R): zeigt nur den Text eines Artikels, ohne Menüs, Werbung
   und Randspalten. Schriftgröße wählbar, hell und dunkel nach System.
+- **Seite übersetzen** (⌥⌘T): übersetzt die Seite an Ort und Stelle – mit dem
+  Modell des Assistenten, von Haus aus also auf dem Mac. Siehe
+  [Seiten übersetzen](#seiten-übersetzen-t).
+- **Security-Ampel mit Seitencheck** (⌥⌘S): Eine Ampel in der Adresszeile
+  sagt, wie die gezeigte Seite dasteht, und ein Klick zeigt, wo sie
+  angreifbar wäre – siehe
+  [Security-Ampel und Seitencheck](#security-ampel-und-seitencheck-s).
+- **Website-Daten**: zeigt je Website, was sie auf dem Mac abgelegt hat
+  (Cookies, gespeicherte Daten, Zwischenspeicher), und löscht es einzeln oder
+  für alle (Einstellungen → Website-Daten).
 - **Umziehen**: Lesezeichen kommen direkt aus Chrome, Brave, Edge oder Vivaldi
   herüber oder aus der HTML-Datei, die Safari und Firefox exportieren;
   Passwörter aus der CSV-Datei jedes Browsers oder Passwortmanagers. Beides
@@ -82,7 +96,7 @@ Kernpunkte, einfach erklären, übersetzen – oder eine eigene Frage stellen. I
 auf der Seite etwas markiert, geht es nur um diese Stelle. Jeder Tab hat seine
 eigene Unterhaltung; sie liegt nur im Arbeitsspeicher.
 
-Drei Modelle stehen zur Wahl („Modell wählen“ unten in der Leiste):
+Vier Wege stehen zur Wahl („Modell wählen“ unten in der Leiste):
 
 | Modell | Wo es läuft | Eigenheiten |
 | --- | --- | --- |
@@ -90,9 +104,21 @@ Drei Modelle stehen zur Wahl („Modell wählen“ unten in der Leiste):
 | **Ollama** | ein Modell der eigenen Ollama-Installation | Bleibt auf dem Mac. Liest etwa 28 000 Zeichen auf einmal. |
 | **Claude** | Claude-API von Anthropic (Opus 5.5, Sonnet 5.5 oder Haiku 5.5) | Am gründlichsten, liest bis 400 000 Zeichen. Der Seitentext wird dafür an Anthropic gesendet. Braucht einen eigenen API-Schlüssel; er liegt im Schlüsselbund von macOS. |
 
+| **Anderer Dienst** | alles, was die verbreitete Chat-Schnittstelle spricht („OpenAI-kompatibel“): LM Studio oder llama.cpp auf dem Mac, OpenAI, OpenRouter, Mistral, eine eigene Adresse | Auf dem Mac ohne Schlüssel. Im Netz mit eigenem Schlüssel (Schlüsselbund); der Seitentext geht dann an diesen Dienst. Das Modell wählt man aus der Liste des Dienstes. |
+
+**Anderer Dienst im Einzelnen:** Die Adresse muss verschlüsselt sein
+(`https://`) – unverschlüsselt geht nur `localhost`. Der Schlüssel gehört zu
+genau dem Dienst, für den er eingetragen wurde: Wechselt die Adresse, wird er
+entfernt statt mitgeschickt, und Umleitungen folgt Zunder nicht. Bei
+**OpenRouter** geht es auch ohne Abtippen: „Bei OpenRouter anmelden“ öffnet
+die Zustimmungsseite in einem Tab (OAuth mit PKCE); danach bekommt Zunder
+einen eigenen Schlüssel für das Konto. Über OpenRouter sind auch die
+Claude-Modelle erreichbar. Anthropic selbst bietet fremden Programmen keine
+solche Anmeldung an – für Claude direkt bleibt es beim API-Schlüssel.
+
 Ohne ausdrückliche Wahl arbeitet der Assistent nur mit Modellen auf dem Mac –
 von selbst geht nie etwas ins Netz. In privaten Fenstern gilt das immer, auch
-wenn sonst Claude gewählt ist. Die Zeile unter dem Eingabefeld zeigt jederzeit,
+wenn sonst Claude oder ein Dienst im Netz gewählt ist. Die Zeile unter dem Eingabefeld zeigt jederzeit,
 welches Modell antwortet und ob der Text den Mac verlässt.
 
 Bei Claude ist für Opus und Sonnet der serverseitige Ersatz eingeschaltet:
@@ -154,6 +180,16 @@ Wenige Schalter, die wirklich etwas bewirken (Einstellungen → Sicherheit):
   Adresse als Vorsatz einer fremden (`paypal.com.konto.example`). Verglichen
   wird nur mit dem, was der Browser selbst weiß: Lesezeichen, gesicherte
   Passwörter, eingetippte und besuchte Seiten. Nichts davon verlässt den Mac.
+- **Vor Betrugs- und Schadseiten warnen** (an): Adressen, die als Betrugsseite
+  (Phishing) oder als Quelle von Schadprogrammen gemeldet sind, öffnet Zunder
+  nicht, sondern zeigt eine Warnseite – mit dem Weg zurück und, für den Fall
+  eines Irrtums, „trotzdem öffnen“ (gilt bis zum Beenden). Gesperrt sind auch
+  Abrufe im Hintergrund und Fenster, die eine Seite dorthin öffnen will; der
+  Schutz gilt unabhängig vom Werbeblocker, also auch auf Websites, für die er
+  abgeschaltet ist. Die beiden Listen holt Zunder zweimal täglich direkt bei
+  ihren Herausgebern und prüft dann auf dem Mac – welche Seiten man besucht,
+  erfährt dabei niemand. Näheres unter
+  [Listen gemeldeter Betrugsseiten](#listen-gemeldeter-betrugsseiten).
 - **Eigenes Netz abschirmen** (an): Eine Website aus dem Internet darf weder
   den Router noch den Drucker noch einen Dienst auf diesem Mac ansprechen –
   nicht im Hintergrund (Bilder, Skripte, `fetch`, WebSockets, eingebettete
@@ -225,7 +261,9 @@ gearbeitet wird.
 Grenzen, ehrlich benannt: Der Schutz des eigenen Netzes prüft die Adresse,
 nicht, wohin ein Name am Ende zeigt – ein öffentlicher Name, der auf ein Gerät
 im Heimnetz umgebogen wurde, fällt nicht auf. Die Warnung vor ähnlichen
-Adressen kennt nur die eigenen Seiten, keine Liste bekannter Betrugsseiten.
+Adressen kennt nur die eigenen Seiten; die Listen gemeldeter Betrugsseiten
+kennen nur, was schon jemand gemeldet hat – eine Betrugsseite von heute Morgen
+steht noch nicht darin.
 Und alles, was WebKit selbst betrifft (Lücken in der Darstellung von Seiten),
 schließt Apple mit den Updates von macOS – Zunder kann dort nur die
 Angriffsfläche verkleinern (Härtung).
@@ -266,6 +304,26 @@ Sperre wird höchstens enger, eine Ausnahme höchstens weiter als in der Liste.
 
 Die Listen stammen von den EasyList-Autoren (<https://easylist.to/>) und stehen
 unter GPL v3 oder CC BY-SA 3.0; Näheres in `assets/filters/README.md`.
+
+### Listen gemeldeter Betrugsseiten
+
+Der Schutz vor Betrugs- und Schadseiten (Einstellungen → Sicherheit) nutzt
+denselben Übersetzer und dieselbe Technik wie der Werbeblocker, aber eigene
+Listen – rund 70.000 Einträge:
+
+- **Phishing URL Blocklist** von malware-filter (gespeist aus OpenPhish,
+  PhishTank und IPThreat), <https://gitlab.com/malware-filter/phishing-filter>,
+  CC BY-SA 4.0.
+- **uBlock filters – Badware risks** der uBlock-Origin-Autoren,
+  <https://github.com/uBlockOrigin/uAssets>, GPL v3.
+
+Diese Listen liegen der App nicht bei: Zunder holt sie kurz nach dem ersten
+Start und danach alle zwölf Stunden. Bis sie da sind, gibt es diesen Schutz
+noch nicht; die
+Einstellungen zeigen, wie viele Einträge gerade gelten. Steht eine ganze
+Website auf der Liste, ist sie als Ganzes gesperrt; ist nur eine einzelne
+Adresse gemeldet (etwa eine Seite auf einem Dienst für Formulare), dann nur
+diese.
 
 ## Stealth-Fenster (⌥⌘N)
 
@@ -321,6 +379,53 @@ Schriften, Cookies, Speicher, Standort, Kamera und Mikrofon, Zwischenablage –
 jeweils mit Anzahl, auch für eingebettete Rahmen. Gezählt wird, was über die
 üblichen Wege läuft (`ui/watch.js`); das ist eine Auskunft, kein Beweis: Eine
 Seite, die es darauf anlegt, kann daran vorbei fragen.
+
+## Security-Ampel und Seitencheck (⌥⌘S)
+
+![Der Seitencheck einer Seite ohne Schutzschichten](docs/zunder-seitencheck.png)
+
+Links in der Adresszeile, wo sonst das Schloss sitzt, steht eine kleine Ampel.
+Sie sagt, wie die **gezeigte Seite** dasteht – nicht Zunder, die Seite:
+
+- **Rot**: Hier ist jetzt etwas gefährdet – die Verbindung ist unverschlüsselt,
+  ein Formular sendet offen, ein Passwortfeld steht auf einer
+  unverschlüsselten Seite, die Verschlüsselung ist veraltet (TLS 1.0/1.1),
+  oder die Seite lädt Skripte von einem Dienst, der nachweislich Schadcode
+  ausgeliefert hat (polyfill.io).
+- **Gelb**: Der Seite fehlen Schutzschichten.
+- **Grün**: Die geprüften Schutzschichten sind da.
+
+Die Zahl neben den Lichtern zählt die Stellen. Ein Klick auf die Ampel (oder
+⌥⌘S) öffnet den **Seitencheck**: jede Stelle mit einem Satz dazu, wie die
+Seite dort angreifbar wäre, darunter Hinweise und was in Ordnung ist.
+
+| Wo | Was der Check ansieht |
+| --- | --- |
+| Verbindung | unverschlüsselt · veraltete Verschlüsselung · gemischte Inhalte · ob die Website Verschlüsselung erzwingt (HSTS) |
+| Eingeschleuster Code | Content-Security-Policy: fehlt, nur im Beobachtungsmodus, oder mit Lücken (`'unsafe-inline'`, Skripte von jeder Adresse, `data:`) – mehrere Policies werden zusammen gelesen, Kennwort/Prüfsumme und `'strict-dynamic'` berücksichtigt |
+| Einbetten | weder `X-Frame-Options` noch `frame-ancestors`: Die Seite lässt sich unsichtbar über fremde Knöpfe legen (Clickjacking) |
+| Skripte | von fremden Rechnern (wie viele, woher) · von öffentlichen Sammelstellen ohne Prüfsumme · veraltete Bibliotheken mit bekannten Lücken: jQuery, jQuery UI, Bootstrap, Lodash, Moment.js, Handlebars sowie die abgekündigten Reihen AngularJS 1 und Vue 2 |
+| Formulare | senden an eine `http`-Adresse · Passwortfeld auf unverschlüsselter Seite |
+| Cookies | Sitzungs-Cookies ohne `Secure`, ohne `HttpOnly`, ohne `SameSite` – gezeigt werden Namen, nie Werte |
+| Auskunft | die Website verrät ihre Software samt Version · meldet eine PHP-Reihe, die der Hersteller nicht mehr pflegt · stellt das Dateityp-Raten nicht ab · gibt volle Adressen an fremde Seiten weiter |
+
+**Wie geprüft wird:** nur mit dem, was beim Laden ohnehin anfällt. Den
+Antwortkopf liest Zunder mit, wenn WebKit die Seite lädt; den Aufbau liest ein
+Skript in Zunders abgeschotteter Welt (`ui/check.js`), das die Seite nicht
+bemerkt; die Merkmale der Cookies kommen aus WebKits Speicher. Es gibt keinen
+zusätzlichen Abruf und keinen Angriff, und nichts davon verlässt den Mac. Die
+Auswertung steht in `src/sitecheck.rs` und ist dort mit Tests belegt.
+
+**Grenzen:** Das ist kein Sicherheitstest. Lücken im Programm einer Website
+sieht man von außen nicht – „Solide“ heißt nur: Die geprüften Schutzschichten
+sind da. Bibliotheken erkennt der Check nur, wenn ihre Version in der Adresse
+des Skripts steht; was in ein großes Bündel verpackt ist, bleibt unerkannt.
+Steht eine Website auf der Vorab-Liste der Browser für erzwungene
+Verschlüsselung, schickt aber den Kopf dazu nicht, meldet der Check
+„nicht erzwungen“. Und was eine Website über sich sagt, zeigt Zunder nur in
+fester Form („Name/Version“, Namen von Cookies ohne Sonderzeichen): Freier
+Text aus einer Website stünde sonst in Zunders eigenem Fenster, als hätte der
+Browser ihn geschrieben.
 
 ## Passwörter
 
@@ -380,6 +485,65 @@ weg und setzt den Text in ruhiger Schrift neu – mit Überschrift, Bildern,
 Listen, Tabellen und Links. Schriftgröße über − und +, hell oder dunkel nach
 System; Esc oder ein zweiter Klick auf den Knopf führt zurück zur Seite.
 
+## Seiten übersetzen (⌥⌘T)
+
+![Eine übersetzte Seite mit dem Hinweis „Original zeigen“](docs/zunder-uebersetzen.png)
+
+„Seite übersetzen“ (Menü, ⌥⌘T oder der Knopf in der Adresszeile, der
+erscheint, wenn eine Seite eine andere Sprache angibt) übersetzt die Seite, wie
+sie dasteht: Überschriften, Absätze, Menüs und Knöpfe wechseln die Sprache,
+Aufbau, Bilder und Links bleiben. Derselbe Befehl – oder „Original zeigen“ im
+Hinweis – holt das Original zurück.
+
+- **Womit:** mit dem Modell, das im Assistenten gewählt ist – Apples Modell
+  oder Ollama auf dem Mac, oder Claude bzw. ein anderer Dienst. Der Hinweis
+  nennt das Modell jedes Mal. Aus privaten und Stealth-Fenstern übersetzt nur
+  ein Modell auf dem Mac; der Text einer Seite geht von dort nie ins Netz.
+- **Wohin:** in die Sprache der Oberfläche (Deutsch oder Englisch). Steht die
+  Seite schon in ihr, wird in die jeweils andere übersetzt.
+- **Wie:** Zunders Skript sammelt die sichtbaren Textstellen. Was nur durch
+  einen Link oder Fettdruck getrennt ist, geht als ein Satz an das Modell und
+  kommt in denselben Stücken zurück – so stimmt der Satzbau, und jeder Link
+  behält seinen Text. Eingesetzt wird ausschließlich Text in vorhandene
+  Textstellen, nie HTML: Der Aufbau der Seite bleibt, wie er war, und was das
+  Modell auch antwortet, kann in der Seite nichts auslösen. Der Seitentext
+  gilt dem Modell als Material – „ignoriere alle Anweisungen“ wird übersetzt,
+  nicht befolgt.
+- **Was bleibt:** Code, Eingabefelder, Stellen, die die Seite selbst als
+  „nicht übersetzen“ markiert, und alles Unsichtbare.
+- **Wie lange:** Die Seite füllt sich Teil für Teil – der eigentliche Inhalt
+  zuerst, Menüs und Fußzeile danach. Auf dem Mac läuft eine Anfrage nach der
+  anderen (bei Apples Modell rund vier Sekunden je Teil; ein langer
+  Wikipedia-Artikel brauchte zwei Minuten), bei einem Dienst im Netz drei
+  nebeneinander. Sehr lange Seiten werden nur am Anfang übersetzt – der
+  Hinweis sagt es dann.
+
+Grenzen: Die Güte ist die des Modells – Apples kleines Modell übersetzt
+verständlich, aber holprig, und lässt Einzelnes stehen („A Leuchtturm ist ein
+Turm“); ein größeres Modell über Ollama übersetzte im Vergleich merklich
+besser. Gegen Claude und andere Dienste im Netz ist das Übersetzen nur mit
+einer Attrappe auf dem Mac geprüft, nicht gegen die echten Dienste. Übersetzt wird
+nur die Seite selbst, nicht eingebettete Rahmen anderer Websites; Text, den
+eine Seite nach dem Übersetzen nachlädt, bleibt im Original, und der Titel des
+Tabs auch.
+
+## Tabs ordnen
+
+![Angeheftete Tabs und zwei Tab-Gruppen](docs/zunder-tab-gruppen.png)
+
+Ein Rechtsklick auf einen Tab bietet beides an:
+
+- **Tab anheften**: Der Tab rückt ganz nach links und zeigt nur noch sein
+  Icon. Angeheftete Tabs kommen nach jedem Start wieder – auch wenn „Beim
+  Start letzte Sitzung wiederherstellen“ abgeschaltet ist –, und „Andere Tabs
+  schließen“ lässt sie stehen.
+- **In neue Gruppe** bzw. **Zur Gruppe …**: Die Tabs einer Gruppe stehen
+  nebeneinander hinter einem farbigen Schild mit ihrem Namen. Ein Klick auf
+  das Schild klappt die Gruppe zu oder auf; ein Rechtsklick benennt sie um,
+  gibt ihr eine von acht Farben, löst sie auf oder schließt sie samt Tabs. Ein
+  Tab, der aus einer Gruppe heraus geöffnet wird, gehört zur selben Gruppe.
+  Gruppen überstehen den Neustart.
+
 ## Gemessen
 
 Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
@@ -396,7 +560,17 @@ Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
 
 ## Was fehlt
 
-- Erweiterungen, Synchronisierung zwischen Geräten, Profile.
+- **Erweiterungen.** WebKit bringt seit macOS 15.4 eine Schnittstelle für
+  Web-Erweiterungen mit; sie anzubinden (Verwaltung, Rechte je Erweiterung,
+  Symbolleiste, Speicher) ist ein eigenes großes Vorhaben.
+- **Synchronisierung zwischen Geräten** – dafür bräuchte es Konten und einen
+  Dienst, der Daten Ende-zu-Ende verschlüsselt aufbewahrt. **Profile**
+  (getrennte Sätze von Verlauf, Lesezeichen und Anmeldungen) gibt es ebenfalls
+  nicht; private und Stealth-Fenster trennen nur für die Dauer des Fensters.
+- **Automatische Updates.** Eine neue Fassung entsteht durch Bauen aus dem
+  Quelltext (`scripts/bundle.sh --install`). Für Updates von selbst bräuchte
+  es eine bei Apple beglaubigte Signatur und eine Stelle, die Fassungen
+  ausliefert.
 - **Passkeys**: WebKit gibt sie eingebetteten Browsern nur mit einer
   Berechtigung frei, die Apple auf Antrag an Browser-Hersteller vergibt. In
   Zunder meldet WebKit deshalb „nicht verfügbar“; Seiten bieten dann den Weg
@@ -411,19 +585,30 @@ Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
   Fließtext?). Auf Seiten, die ihren Text ungewöhnlich verpacken, fehlt
   mitunter etwas oder es bleibt Beiwerk stehen.
 - Mitteilungen von Webseiten und Standortabfrage (bietet WebKit eingebetteten
-  Browsern nicht bzw. nur mit Zusatzaufwand an).
+  Browsern nicht bzw. nur mit Zusatzaufwand an). Die Berechtigung für den
+  Standort verlangt Zunder deshalb gar nicht erst.
 - Der Blocker setzt die Filterlisten um, schleust aber keine Skripte in
   Seiten ein. Werbepausen in Videos und Websites, die Besucher mit Blocker
   aussperren, bleiben deshalb, wie sie sind.
 - Stealth-Fenster: Tor bringt Zunder nicht selbst mit – es nutzt einen
   Tor-Zugang, der auf dem Mac läuft. Ohne ihn bleibt die IP-Adresse sichtbar.
-- Der Assistent kennt Apples Modell auf dem Gerät, Ollama und Claude (mit
-  API-Schlüssel). Andere Dienste und eine Anmeldung per OAuth gibt es nicht.
-- **Sperrliste für Betrugsseiten**: WebKits eigener Schalter dafür ist an, ließ
-  sich mit der offiziellen Testseite in Zunder aber nicht auslösen. Zugesagt
-  wird dieser Schutz deshalb nicht. Zunder warnt selbst vor Adressen, die den
-  eigenen Seiten täuschend ähneln, und beim Passwort am falschen Ort – eine
-  Liste bekannter Betrugsseiten ersetzt das nicht.
+- Der Assistent kann die Anmeldungen von Claude Code oder der Claude-App
+  nicht mitbenutzen (die Sandbox lässt ihn nicht an deren Daten), und er
+  spricht mit anderen Diensten nur über die verbreitete Chat-Schnittstelle.
+- **Betrugsseiten**: Die Listen kennen nur Gemeldetes und gelten erst, wenn
+  sie nach dem ersten Start geholt sind. WebKits eigener Schalter für
+  „betrügerische Websites“ ist zusätzlich an, ließ sich mit der offiziellen
+  Testseite in Zunder aber nicht auslösen – zugesagt wird nur, was Zunder
+  selbst prüft.
+- **„Trotzdem öffnen“** auf der Warnung vor einer gemeldeten Betrugsseite gilt
+  bis zum Beenden für den ganzen Rechner dieser Adresse, nicht nur für die
+  eine gemeldete Unterseite.
+- **Ollama** ist für Zunder, was auf diesem Mac an Ollamas Anschluss
+  antwortet. Läuft Ollama nicht, könnte ein anderes Programm des Macs dort
+  lauschen und bekäme den Seitentext einer Anfrage.
+- **Rechte je Website**: Kamera, Mikrofon und Ähnliches fragt macOS bzw.
+  WebKit bei Bedarf ab; eine Übersicht, welche Website was darf, hat Zunder
+  nicht.
 - **Folgen der Sandbox**: Eine eingetippte Dateiadresse (`file://…`) öffnet
   Zunder nicht mehr – Dateien kommen über „Öffnen mit → Zunder“ herein, und
   dann nur die eine Datei, nicht ihre Nachbarn. Bei Links mit vorgegebenem
@@ -437,6 +622,8 @@ Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
   und nichts im Netz nachschlagen.
 - Der Weg zu Claude ist gegen einen lokalen Nachbau des Dienstes geprüft
   (Anfrage, Antwortstrom, Fehlerfälle), nicht gegen den echten Dienst.
+  Dasselbe gilt für „Anderer Dienst“ und die Anmeldung bei OpenRouter: geprüft
+  gegen Nachbauten auf dem Mac, nicht gegen OpenAI, OpenRouter oder LM Studio.
 - Der API-Schlüssel und der Schlüssel des Passwort-Tresors hängen im
   Schlüsselbund an der Signatur der App. Weil die App nur lokal signiert ist,
   fragt macOS nach jedem Neubau einmal nach dem Passwort des Schlüsselbunds
@@ -485,12 +672,14 @@ der Assistent bietet dann Ollama und Claude an.
 | `src/native.rs` | Direkter Draht zu AppKit/WebKit für alles, was wry nicht anbietet |
 | `src/omnibox.rs` | Adressleiste: Adresse oder Suche, Suchmaschinen, Vorschläge |
 | `src/shield.rs` | Schutz beim Navigieren: nur verschlüsselt, Tracking-Anhängsel |
-| `src/blocker.rs` | Werbeblocker und Schutz des eigenen Netzes: Regellisten für WebKit, Auffrischen, Schalter je Website |
+| `src/blocker.rs` | Werbeblocker, Schutz vor gemeldeten Betrugsseiten und des eigenen Netzes: Regellisten für WebKit, Auffrischen, Schalter je Website |
 | `src/filters.rs` | Übersetzer für Filterlisten (EasyList-Schreibweise → WebKits Regelformat) |
 | `src/stealth.rs` | Stealth-Fenster: Tor-Zugang auf dem Mac finden |
 | `src/vault.rs` | Passwort-Tresor: Verschlüsselung, Schlüssel, Zuordnung zu Websites, CSV |
 | `src/logins.rs` | Passwörter im Browser: Sichern, Ausfüllen, Sprechblase, Verwaltung |
 | `src/reader.rs` | Lesemodus |
+| `src/translate.rs` | Seiten übersetzen: Sätze bündeln, Portionen ans Modell, Antworten einsetzen |
+| `src/sitecheck.rs` | Seitencheck hinter der Security-Ampel: Auswertung von Antwortkopf, Aufbau und Cookies |
 | `src/bookmarks_io.rs` | Lesezeichen aus anderen Browsern übernehmen und sichern |
 | `src/ai.rs` | Die drei Modelle hinter einer Schnittstelle; Zerlegen langer Seiten, Vergleich |
 | `src/assistant.rs` | Seitenleiste des Assistenten: Seitentext holen, Modellwahl, Schlüssel |
@@ -502,7 +691,7 @@ der Assistent bietet dann Ollama und Claude an.
 | `src/dev.rs` | Prüfhilfe – nur in Probe-Apps mit dem Bau-Merkmal `harness` |
 | `helper/zunder-ai.swift` | Brücke zu Apples Sprachmodell (eigenes kleines Programm in der App) |
 | `ui/` | Oberfläche (HTML, CSS, JavaScript), Assistent, Sprechblase, Startseite, Fehlerseite |
-| `ui/logins.js`, `ui/reader.js` | Zunders eigene Skripte in den Seiten (abgeschottete Welt) |
+| `ui/logins.js`, `ui/reader.js`, `ui/translate.js`, `ui/check.js` | Zunders eigene Skripte in den Seiten (abgeschottete Welt) |
 
 Ein Fenster besteht aus einer WebView für den Rahmen (Tab-Leiste,
 Adressleiste, Seitenleisten), einer WebView je Tab und – sobald sie zum ersten
@@ -525,6 +714,46 @@ einem Update von wry zuerst zu prüfen ist; in einer Probe-App zeigt der Befehl
 `hooks`, was nachgerüstet wurde.
 
 ## Wie Zunder sich selbst schützt
+
+Der Code wird in Runden von unabhängiger Seite durchgesehen – zuletzt am
+22.11.2026 in drei getrennten Durchsichten (Listen und Stealth, KI und
+Übersetzen, Oberfläche und Befehle). Was dabei herauskam, ist behoben und,
+wo es sich nachstellen ließ, mit einem Versuch vorher und nachher belegt:
+
+- **„Im Verlauf“ zählt nur für echte Verlaufseinträge.** WebKit meldet auch
+  die Weiterleitung, mit der ein Server auf ein Neuladen antwortet, als
+  „Neuladen“. Eine Seite, die sich selbst neu lädt, kam so an der Abschirmung
+  des eigenen Netzes vorbei und konnte Zunders Warnseite mit erfundenem Inhalt
+  laden. Jetzt prüft Zunder, ob das Ziel wirklich der Eintrag im Verlauf ist;
+  die eigenen Warnseiten tragen zusätzlich ein Siegel, das je Start neu
+  ausgewürfelt wird.
+- **`beispiel.de.` ist `beispiel.de`.** Der Punkt, der hinter jedem
+  Rechnernamen stehen darf, führte an den Listen vorbei – auch an der für das
+  eigene Netz (`localhost.`). Alle Muster nehmen ihn jetzt hin.
+- **Listen folgen der Seite, die ein Tab zeigt** – nicht einer Adresse, zu
+  der er nur aufgebrochen ist. Sonst würde eine Seite den Werbeblocker los,
+  indem sie zum Schein zu einer Website aufbricht, für die er abgeschaltet
+  ist. Auf Zunders eigenen Seiten gelten die Listen gar nicht: Keine Regel
+  kann dort den Text einer Warnung ausblenden.
+- **Hinweise gehören zu der Seite, die sie ausgelöst hat.** Sie nennen die
+  Website, erscheinen nur über ihrem Tab und verschwinden, wenn er die Website
+  wechselt. Eine Warnung räumt ihren Platz nicht für einen gewöhnlichen
+  Hinweis.
+- **Ein Schlüssel gehört genau einem Dienst.** Er liegt im Schlüsselbund unter
+  dessen Adresse; eine Anfrage an einen Dienst kann nur dessen eigenen
+  Schlüssel holen. Wechselt Modell, Dienst oder Schlüssel, endet jede laufende
+  Übersetzung.
+- **Eine Übersetzung schreibt nur in die Seite, die sie gelesen hat** – nie in
+  eine andere, die inzwischen im Tab steht. Verlässt eine Seite den Tab, kommt
+  ihr Original zurück.
+- **Keine Link-Vorschau** beim kräftigen Klick: Sie lüde die Adresse an den
+  Prüfungen, den Listen und – im Stealth-Fenster – am Tunnel vorbei.
+- **Manipulierte Filterlisten** können sich nicht mehr mit einem Fantasie-Datum
+  für immer als „die neueste“ festsetzen; nimmt WebKit einen Teil eines
+  Listensatzes nicht an, bleibt es beim vorigen.
+- **Privat bleibt privat:** Eine Erlaubnis fürs eigene Netz aus einem privaten
+  oder Stealth-Fenster gilt nur bis zum Beenden. „Neu laden“ auf der Warnung
+  vor dem eigenen Netz lädt die Warnung neu, nicht das Ziel.
 
 - Die ausgelieferte App lässt sich nicht von außen steuern: Die Prüfhilfe
   (Befehle über die Standardeingabe, Umgebungsvariablen zum Prüfen) steckt nur
@@ -601,7 +830,7 @@ einem Update von wry zuerst zu prüfen ist; in einer Probe-App zeigt der Befehl
 ## Icons und Hintergründe
 
 Alle Icons wurden über Higgsfield generiert (Modell `gpt_image_2_6`): das
-App-Icon als Bild, die 50 Icons der Oberfläche als SVG. Die unveränderten
+App-Icon als Bild, die 51 Icons der Oberfläche als SVG. Die unveränderten
 Ergebnisse liegen in `assets/higgsfield-raw/`, die Auftragsnummern in
 `assets/icon-jobs.json`.
 
@@ -681,8 +910,11 @@ Datenhaltung, die Sperrliste, den Schutz beim Navigieren, das Zerlegen und
 Verpacken von Seitentext, die Form der Anfragen an die Modelle, das Ausliefern
 der Hintergründe, den Passwort-Tresor (Zuordnung zu Websites, Verschlüsselung,
 Vorschläge, CSV), das Einlesen von Lesezeichen, den Übersetzer für
-Filterlisten – auch mit den mitgelieferten Listen als Ganzes – und das Erkennen
-eines Tor-Zugangs (65 Tests).
+Filterlisten – auch mit den mitgelieferten Listen als Ganzes –, das Erkennen
+eines Tor-Zugangs, das Übersetzen von Seiten (Sätze bündeln, Antworten des
+Modells zuordnen, Sprache erkennen) und den Seitencheck (Schutzregeln lesen,
+Bibliotheken an ihrer Adresse erkennen, was eine Website über sich sagt, nur
+in fester Form zeigen; 85 Tests).
 
 Der Name „Zunder“ ist ein Arbeitstitel. Er steht in `Cargo.toml`,
 `scripts/bundle.sh`, `src/menu.rs`, `src/i18n.rs` und im Schema `zunder://`.
