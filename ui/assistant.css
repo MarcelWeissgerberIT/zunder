@@ -429,6 +429,32 @@
   color: var(--muted);
 }
 
+/* Gedächtnis-Schalter links im Eingabefeld. */
+#memory {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-left: -5px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+#memory:hover {
+  background: var(--hover, rgba(127, 127, 127, 0.14));
+  color: var(--text);
+}
+
+#memory.on {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+
 #send {
   flex: none;
   width: 28px;

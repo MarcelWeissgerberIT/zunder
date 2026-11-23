@@ -2535,6 +2535,7 @@
       ['translate_page', translated ? S.m_translate_undo : S.m_translate, 'translate', '⌥⌘T'],
       ['bookmark_page', S.m_bookmark_page, 'star', '⌘D'],
       ['read_later', S.m_read_later, 'bookmark', ''],
+      ['remember_page', S.m_remember_page, 'sparkle', ''],
       ['copy_clean_url', S.m_copy_clean_url, 'copy', ''],
       ['find', S.m_find, 'search', '⌘F'],
       ['print', S.m_print, 'print', '⌘P'],
@@ -2555,6 +2556,7 @@
       ['app_inbox', S.m_app_inbox, 'list', ''],
       ['app_notes', S.m_app_notes, 'edit', ''],
       ['app_read', S.m_app_read, 'bookmark', ''],
+      ['app_memory', S.m_app_memory, 'sparkle', ''],
     ];
     return rows.map(([id, label, ic, hint]) => ({ id, label: label || id, icon: ic, hint }));
   }

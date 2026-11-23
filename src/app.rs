@@ -109,6 +109,8 @@ pub enum UserEvent {
     /// also Material). `slot` zählt die Seiten der Anfrage durch; `usize::MAX`
     /// heißt: nicht länger warten.
     AiPage { window: WindowId, job: u64, slot: usize, json: String },
+    /// Der Text einer Seite ist da, die ins Gedächtnis gelegt werden soll.
+    Remembered { window: WindowId, title: String, url: String, json: String },
     /// Zwischenstand oder Ergebnis einer Anfrage an den Assistenten.
     Ai { window: WindowId, job: u64, ev: ai::Event },
     /// Welche Modelle gerade nutzbar sind.
@@ -1214,6 +1216,7 @@ impl App {
             UserEvent::SiteDataChanged { window, query } => self.send_panel(window, "sitedata", &query),
             UserEvent::MediaRule { site, rule } => self.media_remembered(&site, rule),
             UserEvent::AiPage { window, job, slot, json } => self.ai_page_ready(window, job, slot, json),
+            UserEvent::Remembered { window, title, url, json } => self.remember_store(window, title, url, json),
             UserEvent::Ai { window, job, ev } => self.ai_event(window, job, ev),
             UserEvent::AiProbe(probe) => self.ai_probe_done(probe),
             UserEvent::AiOther(event) => self.ai_other_event(event),

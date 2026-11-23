@@ -361,6 +361,82 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
+    // Gedächtnis
+    // -----------------------------------------------------------------------
+
+    /// Legt die aktuelle Seite ins Gedächtnis: Zunder liest ihren Text (wie für
+    /// den Assistenten, abgeschottet und als Text) und sichert ihn lokal. Der
+    /// Text kommt erst gleich – das Sichern erledigt `remember_store`.
+    pub fn remember_page(&mut self, window: WindowId) {
+        // In privaten Fenstern wird nichts gemerkt – das Gedächtnis ist dauerhaft.
+        if self.windows.get(&window).is_some_and(|win| win.private) {
+            self.notice(window, t("gd_private").to_string(), None, 2600);
+            return;
+        }
+        let proxy = self.proxy.clone();
+        let started = {
+            let Some(win) = self.windows.get(&window) else {
+                return;
+            };
+            let Some(tab) = win.active_tab() else {
+                return;
+            };
+            match (readable(&tab.url), tab.webview.as_ref()) {
+                (true, Some(webview)) => {
+                    let title = tab.display_title();
+                    let url = omnibox::bar_url(tab.shown_url());
+                    native::eval_isolated(webview, &format!("JSON.stringify({EXTRACT_JS})"), move |json| {
+                        let json = json.filter(|j| j.len() <= 8_000_000).unwrap_or_default();
+                        let _ = proxy.send_event(UserEvent::Remembered {
+                            window,
+                            title: title.clone(),
+                            url: url.clone(),
+                            json,
+                        });
+                    });
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !started {
+            self.notice(window, t("mem_not_a_page").to_string(), None, 2400);
+        }
+    }
+
+    /// Der Text der zu merkenden Seite ist da: als Karteikarte ins Gedächtnis
+    /// (`app_records`-Kind „memory"), wie die Gedächtnis-App sie liest.
+    pub fn remember_store(&mut self, window: WindowId, title: String, url: String, json: String) {
+        let mut text = read_page(&json, &title, &url).map(|page| page.text).unwrap_or_default();
+        if text.len() > crate::memory::TEXT_MAX {
+            let mut end = crate::memory::TEXT_MAX;
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.truncate(end);
+        }
+        if text.trim().is_empty() {
+            self.notice(window, t("mem_empty").to_string(), None, 2400);
+            return;
+        }
+        // Je Aufruf eine andere Kennung, auch bei zwei Seiten in derselben Millisekunde.
+        static MEM_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let seq = MEM_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("m-{now:x}{seq:x}");
+        let record = json!({ "k": "m", "url": url, "title": title, "text": text, "when": now }).to_string();
+        let message = match self.store.put_app_record("memory", &id, &record, crate::memory::LIMIT) {
+            crate::store::RecordPut::Stored => "mem_saved",
+            crate::store::RecordPut::Full => "mem_full",
+            crate::store::RecordPut::Failed => "mem_failed",
+        };
+        self.notice(window, t(message).to_string(), None, 2400);
+    }
+
+    // -----------------------------------------------------------------------
     // Modelle
     // -----------------------------------------------------------------------
 
@@ -949,6 +1025,9 @@ impl App {
             .and_then(Value::as_array)
             .map(|ids| ids.iter().filter_map(Value::as_u64).collect())
             .unwrap_or_default();
+        // Gedächtnis-Modus: Die Frage geht nicht an die Seite vor der Leiste,
+        // sondern an die gemerkten Seiten, die am besten dazu passen.
+        let memory = message.get("memory").and_then(Value::as_bool).unwrap_or(false);
 
         self.ai_next_job += 1;
         let id = self.ai_next_job;
@@ -973,7 +1052,8 @@ impl App {
             let asked_page = message.get("page").and_then(Value::as_str);
             let gone = base.is_some_and(|id| id != base_id);
             let moved = asked_page.is_some_and(|key| win.tabs[base_index].url.split('#').next().unwrap_or("") != key);
-            if gone || moved {
+            // Im Gedächtnis-Modus spielt die Seite vor der Leiste keine Rolle.
+            if (gone || moved) && !memory {
                 win.assistant_send(json!({ "t": "aiFailed", "text": t("ai_page_changed") }));
                 return;
             }
@@ -990,29 +1070,46 @@ impl App {
             }
 
             let mut sources: Vec<Source> = Vec::new();
-            for (slot, index) in indices.iter().enumerate() {
-                let tab = &win.tabs[*index];
-                let mut asked = false;
-                if let (true, Some(webview)) = (readable(&tab.url), tab.webview.as_ref()) {
-                    // In Zunders abgeschotteter Welt und als Text: Die Skripte der
-                    // Seite können dem Auslesen nichts unterschieben, und der
-                    // Umfang ist dort begrenzt, wo die Seite nicht hinkommt.
-                    let page_proxy = proxy.clone();
-                    native::eval_isolated(webview, &format!("JSON.stringify({EXTRACT_JS})"), move |json| {
-                        let json = json.filter(|j| j.len() <= 8_000_000).unwrap_or_default();
-                        let _ = page_proxy.send_event(UserEvent::AiPage { window, job: id, slot, json });
-                    });
-                    asked = true;
-                }
-                if asked {
-                    outstanding += 1;
+            if memory {
+                // Die passenden gemerkten Seiten als EIN Lesetext – er liegt
+                // schon auf der Platte, es muss nichts von einer Seite kommen.
+                // `run` kürzt den Text später auf das, was das Modell fasst.
+                let records = crate::memory::load(&self.store);
+                let text = crate::memory::gather(&records, &question, 4, 40_000);
+                if text.trim().is_empty() {
+                    win.assistant_send(json!({ "t": "aiFailed", "text": t("mem_none") }));
+                    return;
                 }
                 sources.push(Source {
-                    title: tab.display_title(),
-                    url: tab.url.clone(),
-                    // Von einer nicht lesbaren Seite kommt auch später nichts.
-                    json: if asked { None } else { Some(String::new()) },
+                    title: t("mem_source_title").to_string(),
+                    url: String::new(),
+                    json: Some(json!({ "text": text, "truncated": false }).to_string()),
                 });
+            } else {
+                for (slot, index) in indices.iter().enumerate() {
+                    let tab = &win.tabs[*index];
+                    let mut asked = false;
+                    if let (true, Some(webview)) = (readable(&tab.url), tab.webview.as_ref()) {
+                        // In Zunders abgeschotteter Welt und als Text: Die Skripte der
+                        // Seite können dem Auslesen nichts unterschieben, und der
+                        // Umfang ist dort begrenzt, wo die Seite nicht hinkommt.
+                        let page_proxy = proxy.clone();
+                        native::eval_isolated(webview, &format!("JSON.stringify({EXTRACT_JS})"), move |json| {
+                            let json = json.filter(|j| j.len() <= 8_000_000).unwrap_or_default();
+                            let _ = page_proxy.send_event(UserEvent::AiPage { window, job: id, slot, json });
+                        });
+                        asked = true;
+                    }
+                    if asked {
+                        outstanding += 1;
+                    }
+                    sources.push(Source {
+                        title: tab.display_title(),
+                        url: tab.url.clone(),
+                        // Von einer nicht lesbaren Seite kommt auch später nichts.
+                        json: if asked { None } else { Some(String::new()) },
+                    });
+                }
             }
             win.assistant_send(json!({
                 "t": "aiStarted",

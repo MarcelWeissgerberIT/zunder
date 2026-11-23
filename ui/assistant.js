@@ -58,6 +58,7 @@
 
   let models = null; // was der Rust-Teil über die Modelle weiß
   let page = null; // die Seite, die gerade vor der Leiste liegt
+  let memoryMode = false; // Gedächtnis-Modus: Fragen gehen an die gemerkten Seiten
   let view = 'chat'; // 'chat' | 'models' | 'pick'
   const talks = new Map(); // Tab -> { items, key, others }
   let running = null; // { tab, answer, job }
@@ -149,9 +150,15 @@
     // Browser prüft das nach, statt einfach den Tab zu nehmen, der beim
     // Eintreffen vorn ist.
     const message = { c: 'aiAsk', action, text: text || '', history: pairs, base: key };
-    if (key === page.tab) message.page = page.key;
-    if (several) {
-      message.others = current.others.map((other) => other.id);
+    // Gedächtnis-Modus: Die Frage geht an die gemerkten Seiten, nicht an die
+    // Seite vor der Leiste.
+    if (memoryMode) {
+      message.memory = true;
+    } else {
+      if (key === page.tab) message.page = page.key;
+      if (several) {
+        message.others = current.others.map((other) => other.id);
+      }
     }
     post(message);
     view = 'chat';
@@ -477,13 +484,17 @@
     const several = comparing(current);
     const quick = $('quick');
     quick.textContent = '';
-    quick.hidden = !(canRead && current && current.items.length);
+    quick.hidden = memoryMode || !(canRead && current && current.items.length);
     if (!quick.hidden) {
       if (several) quick.appendChild(button('chip strong', S.ai_compare, () => ask('compare', '')));
       for (const action of ACTIONS) quick.appendChild(button('chip', action.label, () => ask(action.id, '')));
       if (!several) quick.appendChild(button('chip', S.ai_compare, openPicker));
     }
-    input.placeholder = several ? S.ai_input_compare : canRead ? S.ai_input : S.ai_input_blank;
+    input.placeholder = memoryMode ? S.ai_memory_ask : several ? S.ai_input_compare : canRead ? S.ai_input : S.ai_input_blank;
+
+    const memoryButton = $('memory');
+    memoryButton.classList.toggle('on', memoryMode);
+    memoryButton.title = memoryMode ? S.ai_memory_tip : S.ai_memory;
 
     const send = $('send');
     const busy = !!running;
@@ -987,6 +998,13 @@
   $('send').addEventListener('click', () => {
     if (running) stop();
     else submit();
+    input.focus();
+  });
+
+  // Gedächtnis-Modus an/aus: dann gehen Fragen an die gemerkten Seiten.
+  $('memory').addEventListener('click', () => {
+    memoryMode = !memoryMode;
+    renderComposer();
     input.focus();
   });
 

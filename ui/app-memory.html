@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title></title>
+<link rel="stylesheet" href="apps.css">
+<link rel="stylesheet" href="app-memory.css">
+</head>
+<body>
+<!--ICONS-->
+<header id="bar">
+  <div id="bar-left">
+    <h1 id="title"></h1>
+    <span id="count" class="count"></span>
+  </div>
+  <div id="bar-right">
+    <input id="search" type="search" autocomplete="off" spellcheck="false">
+    <div id="sort" class="segmented"></div>
+    <button id="clear" type="button" class="ghost" hidden></button>
+  </div>
+</header>
+
+<p id="hint" class="banner" hidden></p>
+<p id="private-note" class="banner" hidden></p>
+<p id="trouble" class="banner" hidden><span id="trouble-text"></span> <button id="trouble-retry" type="button" class="link"></button></p>
+
+<main>
+  <div id="list" class="list"></div>
+  <p id="empty" class="empty" hidden></p>
+</main>
+
+<div id="toast" hidden>
+  <span id="toast-text"></span>
+  <button id="toast-undo" type="button"></button>
+</div>
+
+<!--DATA-->
+<script src="apps.js"></script>
+<script src="app-memory.js"></script>
+</body>
+</html>

@@ -610,6 +610,7 @@ impl App {
             "clear_data" => self.show(window, "clearData", true),
             "bookmark_page" => self.toggle_bookmark(window),
             "read_later" => self.read_later(window),
+            "remember_page" => self.remember_page(window),
             "copy_clean_url" => self.copy_clean_url(window),
             "bookmark_bar" => {
                 self.settings.bm_bar = !self.settings.bm_bar;

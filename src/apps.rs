@@ -221,6 +221,25 @@ pub const APPS: &[App] = &[
         requests: false,
         api: false,
     },
+    // Gedächtnis: Seiten, die der Mensch gemerkt hat, als Text (für den
+    // Assistenten). Hinein kommen sie über den Befehl „Seite ins Gedächtnis
+    // legen“ (commands.rs → assistant.rs); die App geht nicht ins Netz.
+    App {
+        id: "memory",
+        name: "app_memory",
+        about: "app_memory_about",
+        icon: "sparkle",
+        page: "app-memory.html",
+        files: &["apps.css", "apps.js", "app-memory.css", "app-memory.js"],
+        connect: &[],
+        images: &[],
+        location: false,
+        records: crate::memory::LIMIT,
+        exports: &[],
+        scans: false,
+        requests: false,
+        api: false,
+    },
 ];
 
 /// So groß ist der Zettel einer App höchstens (Bytes). Mehr passte auch nicht
@@ -732,6 +751,7 @@ mod tests {
             ("app-inbox.js", include_str!("../ui/app-inbox.js")),
             ("app-notes.js", include_str!("../ui/app-notes.js")),
             ("app-read.js", include_str!("../ui/app-read.js")),
+            ("app-memory.js", include_str!("../ui/app-memory.js")),
         ];
         for (name, script) in scripts {
             let keys = text_keys(script);

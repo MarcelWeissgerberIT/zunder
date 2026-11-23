@@ -19,6 +19,7 @@ mod geo;
 mod i18n;
 mod logins;
 mod media;
+mod memory;
 mod menu;
 mod native;
 mod omnibox;
