@@ -892,6 +892,26 @@ Haken setzen, Ziehen zwischen Spalten, Karte bearbeiten (Notiz, Farbe, Art),
 Fenster (nichts gemerkt). Eine lange Notiz wird so weit gekürzt, dass die Karte
 in eine Karteikarte passt.
 
+### Posteingang
+
+Zunder als **Client für Atlas**: zeigt offene Vorgänge (Features, Tickets, Bugs)
+aus einem Atlas-Dienst an einer Stelle; ein Klick öffnet den Vorgang in einem
+neuen Tab. Die App selbst geht nicht ins Netz – den Abruf macht der Browser.
+
+- **Einrichten:** einmal die Atlas-Adresse (`https://…`) und einen Zugangstoken
+  eintragen. Der Token bleibt im **Schlüsselbund** dieses Macs und wird nie an
+  die Seite gegeben; die Serveradresse ist eine Einstellung des Browsers, nicht
+  etwas, das die Seite je Anfrage bestimmt (sonst ließe sich der Token
+  umlenken). Die Seite darf nur eine feste Liste von Pfaden abrufen.
+- **Sofort da:** die Vorgänge liegen zusätzlich lokal beim Browser, der
+  Posteingang ist also ohne Wartezeit und auch ohne Netz lesbar.
+- **Tarnung/privat:** im Tarnfenster nicht verfügbar (ein eigener Abruf umginge
+  den Tunnel); im privaten Fenster wird nichts gespeichert.
+
+Erster Schritt: nur lesen, nur Atlas. One, Inline-Antworten, Benachrichtigungen
+und „von überall erfassen“ sind als nächste Bausteine vorgesehen
+(`docs/spec-app-inbox.md`).
+
 ## Passwörter
 
 ![Vorschlag am Anmeldefeld](docs/zunder-passwoerter.png)
@@ -1207,6 +1227,7 @@ der Assistent bietet dann Ollama und Claude an.
 | `src/apps.rs` | Eingebaute Apps: welche es gibt, was jede darf (Netz, Standort, Speicher, Dateien sichern, Abrufen), ihre Adressen und Anfragen |
 | `src/security.rs` | Sicherheitscheck: eine Adresse abrufen, den Quelltext lesen und – mit `sitecheck` – bewerten; dazu ein paar gefahrlose aktive Prüfungen |
 | `src/inspect.rs` | Request-Inspektor: eine frei zusammengestellte HTTP-Anfrage schicken und die rohe Antwort zurückgeben |
+| `src/inbox.rs` | Posteingang: einen Dienst (Atlas) mit nativ verwahrtem Token abrufen; Adresse als Einstellung, Pfad aus fester Liste |
 | `src/geo.rs` | Standort von macOS für eingebaute Apps – nie für Webseiten |
 | `src/pdfs.rs` | Eingebettete PDFs, die WebKit leer lässt: was der Browser annimmt, aufbewahrt und wieder herausgibt – und wann er einen Download absagt, den WebKit für ein eingebettetes PDF von sich aus beginnt (die Stellen selbst stehen in `src/native.rs`) |
 | `src/bookmarks_io.rs` | Lesezeichen aus anderen Browsern übernehmen und sichern |
@@ -1227,6 +1248,7 @@ der Assistent bietet dann Ollama und Claude an.
 | `ui/app-security.*` | Die App „Sicherheitscheck“ |
 | `ui/app-request.*` | Die App „Request-Inspektor“ |
 | `ui/app-tasks.*` | Die App „Aufgaben“ (Kanban-Boards; rein in der Oberfläche, ohne eigenen Rust-Teil) |
+| `ui/app-inbox.*` | Die App „Posteingang“ (Zunder als Client für Atlas) |
 
 Ein Fenster besteht aus einer WebView für den Rahmen (Tab-Leiste,
 Adressleiste, Seitenleisten), einer WebView je Tab und – sobald sie zum ersten

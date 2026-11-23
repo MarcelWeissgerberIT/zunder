@@ -142,6 +142,18 @@
       return call('request', { req }, { timeout: 35000, progress, done: (answer) => answer.state !== 'sending' });
     },
 
+    // Lässt den Browser einen Dienst (Atlas) abrufen – nur der Posteingang darf
+    // das. Der Zugangstoken bleibt beim Browser (Schlüsselbund), die Seite sieht
+    // ihn nie; die Serveradresse ist eine Einstellung des Browsers. `payload` ist
+    // { action: 'status' | 'set' | 'clear' | 'get', … }. Antwort-Zustände: 'ok',
+    // 'no_base', 'no_token', 'unreachable', 'refused', 'invalid', 'busy',
+    // 'private', 'too_big', 'timeout'.
+    api(payload, progress) {
+      const message = 'A:' + JSON.stringify({ n: 0, op: 'api', api: payload });
+      if (new TextEncoder().encode(message).length > 4000) return Promise.resolve({ state: 'too_big' });
+      return call('api', { api: payload }, { timeout: 60000, progress, done: (answer) => answer.state !== 'loading' });
+    },
+
     // Die Karteikarten der App (wo für sie welche eingetragen sind): viele
     // kleine Einträge, jeder ein Objekt unter seiner Kennung aus Buchstaben,
     // Ziffern, „-“ und „_“.

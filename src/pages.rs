@@ -909,6 +909,65 @@ impl App {
                     self.app_reply(window, tab_id, app.id, n, json!({ "state": "sending" }));
                 }
             }
+            // Der Posteingang lässt den Browser Atlas abrufen. Lesen/Schreiben
+            // der Einstellung läuft hier (Hauptthread), der eigentliche Abruf im
+            // Hintergrund. Der Token bleibt nativ; im Stealth-Fenster gar nichts.
+            Op::Api(input) => {
+                use crate::inbox::Action;
+                if !app.api {
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "refused" }));
+                } else if stealth {
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "refused", "why": "stealth" }));
+                } else {
+                    match crate::inbox::action(&input) {
+                        Action::Bad => self.app_reply(window, tab_id, app.id, n, json!({ "state": "invalid" })),
+                        Action::Status => {
+                            let base = self.store.try_setting(crate::inbox::BASE_KEY).ok().flatten().unwrap_or_default();
+                            self.app_reply(window, tab_id, app.id, n, json!({ "state": "ok", "base": base, "hasToken": crate::inbox::has_token() }));
+                        }
+                        Action::Set { base, token } => {
+                            if private {
+                                self.app_reply(window, tab_id, app.id, n, json!({ "state": "private" }));
+                            } else if !self.store.try_set_setting(crate::inbox::BASE_KEY, &base) {
+                                self.app_reply(window, tab_id, app.id, n, json!({ "state": "failed" }));
+                            } else {
+                                if let Some(token) = token {
+                                    crate::inbox::set_token(&token);
+                                }
+                                self.app_reply(window, tab_id, app.id, n, json!({ "state": "ok", "base": base, "hasToken": crate::inbox::has_token() }));
+                            }
+                        }
+                        Action::Clear => {
+                            if private {
+                                self.app_reply(window, tab_id, app.id, n, json!({ "state": "private" }));
+                            } else {
+                                crate::inbox::clear_token();
+                                let base = self.store.try_setting(crate::inbox::BASE_KEY).ok().flatten().unwrap_or_default();
+                                self.app_reply(window, tab_id, app.id, n, json!({ "state": "ok", "base": base, "hasToken": false }));
+                            }
+                        }
+                        Action::Get { path, query } => {
+                            let base = self.store.try_setting(crate::inbox::BASE_KEY).ok().flatten().filter(|base| !base.is_empty());
+                            if let Some(base) = base {
+                                if !crate::inbox::begin() {
+                                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "busy" }));
+                                } else {
+                                    let (proxy, id) = (self.proxy.clone(), app.id);
+                                    std::thread::spawn(move || {
+                                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::inbox::fetch(&base, &path, &query)))
+                                            .unwrap_or_else(|_| json!({ "state": "failed" }));
+                                        crate::inbox::finish();
+                                        let _ = proxy.send_event(crate::app::UserEvent::Api { window, tab: tab_id, app: id, n, result });
+                                    });
+                                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "loading" }));
+                                }
+                            } else {
+                                self.app_reply(window, tab_id, app.id, n, json!({ "state": "no_base" }));
+                            }
+                        }
+                    }
+                }
+            }
             Op::Forget => {
                 self.store.set_setting(&crate::apps::location_key(app.id), "");
                 self.geo_waiters.retain(|(_, _, waiting, _)| *waiting != app.id);

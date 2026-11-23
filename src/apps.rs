@@ -57,6 +57,11 @@ pub struct App {
     /// lassen und die rohe Antwort sehen? Nur der Request-Inspektor
     /// (`inspect.rs`).
     pub requests: bool,
+    /// Darf sie den Browser einen Dienst (Atlas) mit einem nativ verwahrten
+    /// Token abrufen lassen? Nur der Posteingang (`inbox.rs`). Der Token liegt im
+    /// Schlüsselbund, die Seite sieht ihn nie; die Serveradresse ist eine
+    /// Einstellung des Browsers, nicht etwas, das die Seite je Anfrage bestimmt.
+    pub api: bool,
 }
 
 pub const APPS: &[App] = &[
@@ -83,6 +88,7 @@ pub const APPS: &[App] = &[
         exports: &[],
         scans: false,
         requests: false,
+        api: false,
     },
     // Zeiterfassung: Sie geht gar nicht ins Netz. Was gebucht ist, liegt als
     // Karteikarten beim Browser – genug für viele Jahre.
@@ -101,6 +107,7 @@ pub const APPS: &[App] = &[
         exports: &["csv"],
         scans: false,
         requests: false,
+        api: false,
     },
     // Sicherheitscheck: ruft eine Adresse ab und prüft sie – damit man die
     // eigenen Seiten härten kann. Der Abruf macht der Browser, nicht die Seite.
@@ -120,6 +127,7 @@ pub const APPS: &[App] = &[
         exports: &["md"],
         scans: true,
         requests: false,
+        api: false,
     },
     // Request-Inspektor: eine HTTP-Anfrage zusammenstellen und die rohe Antwort
     // sehen – wie `curl`, für die eigenen Schnittstellen. Der Browser schickt sie.
@@ -138,6 +146,7 @@ pub const APPS: &[App] = &[
         exports: &[],
         scans: false,
         requests: true,
+        api: false,
     },
     // Aufgaben: Todos und Notizen auf Kanban-Boards. Rein lokal, kein Netz.
     App {
@@ -155,6 +164,26 @@ pub const APPS: &[App] = &[
         exports: &["md"],
         scans: false,
         requests: false,
+        api: false,
+    },
+    // Posteingang: Zunder als Client für Atlas. Die Seite geht nicht ins Netz;
+    // der Browser ruft Atlas ab (`inbox.rs`), der Token bleibt im Schlüsselbund.
+    App {
+        id: "inbox",
+        name: "app_inbox",
+        about: "app_inbox_about",
+        icon: "list",
+        page: "app-inbox.html",
+        files: &["apps.css", "apps.js", "app-inbox.css", "app-inbox.js"],
+        connect: &[],
+        images: &[],
+        location: false,
+        // Den Posteingang lokal zwischenspeichern.
+        records: 500,
+        exports: &[],
+        scans: false,
+        requests: false,
+        api: true,
     },
 ];
 
@@ -300,6 +329,9 @@ pub enum Op {
     /// Den Browser eine frei zusammengestellte HTTP-Anfrage schicken lassen (das
     /// JSON-Objekt der Anfrage als Text; `inspect.rs` liest es).
     Request(String),
+    /// Den Browser einen Dienst (Atlas) abrufen lassen – das JSON-Objekt der
+    /// Bitte als Text (`{action,…}`; `inbox.rs` liest es). Nur der Posteingang.
+    Api(String),
 }
 
 /// Eine Anfrage: laufende Nummer (unter der die Antwort zurückkommt) und Wunsch.
@@ -354,6 +386,16 @@ fn wish(value: &Value) -> Option<Op> {
                 return None;
             }
             Op::Request(text)
+        }
+        "api" => {
+            // Das ganze Bitte-Objekt {action,…} als Text weiter; gelesen und
+            // geprüft wird es erst nativ (`inbox::action`).
+            let payload = value.get("api").filter(|value| value.is_object())?;
+            let text = serde_json::to_string(payload).ok()?;
+            if text.len() > 4096 {
+                return None;
+            }
+            Op::Api(text)
         }
         _ => return None,
     })
@@ -651,6 +693,7 @@ mod tests {
             ("app-security.js", include_str!("../ui/app-security.js")),
             ("app-request.js", include_str!("../ui/app-request.js")),
             ("app-tasks.js", include_str!("../ui/app-tasks.js")),
+            ("app-inbox.js", include_str!("../ui/app-inbox.js")),
         ];
         for (name, script) in scripts {
             let keys = text_keys(script);
@@ -695,6 +738,13 @@ mod tests {
         let tasks = by_id("tasks").unwrap();
         assert!(tasks.records > 0 && tasks.exports == ["md"] && !tasks.scans && !tasks.requests && tasks.connect.is_empty());
         assert_eq!(url_of("tasks"), "zunder://app-tasks/");
+        // Posteingang: darf Atlas abrufen (als einzige App), ohne Netz der Seite,
+        // ohne Standort, mit Karteikarten zum Zwischenspeichern.
+        let inbox = by_id("inbox").unwrap();
+        assert!(inbox.api && inbox.connect.is_empty() && inbox.images.is_empty() && !inbox.location && inbox.records > 0);
+        assert!(!inbox.scans && !inbox.requests);
+        assert!(!security.api && !inspector.api && !tasks.api && !time.api && !by_id("weather").unwrap().api);
+        assert_eq!(url_of("inbox"), "zunder://app-inbox/");
         // Dateien sichert nur die Zeiterfassung – als Tabelle, sonst nichts.
         assert!(may_export(time, "zeiten-2026-11.csv") && may_export(time, "ZEITEN.CSV"));
         for name in ["zeiten.html", "zeiten.csv.app", "zeiten.command", "zeiten", "csv"] {
