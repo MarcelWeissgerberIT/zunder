@@ -57,6 +57,27 @@
     return box;
   }
 
+  // Buchstaben-Zeichen für angeheftete Tabs ohne eigenes Seiten-Icon: der erste
+  // Buchstabe des Titels, eingefärbt nach der Website – so ist jeder angeheftete
+  // Tab (nur Symbol, kein Titel) auf einen Blick zu unterscheiden.
+  function monogram(tab) {
+    const box = el('span', 'fav mono');
+    let host = '';
+    try {
+      host = new URL(tab.url).hostname.replace(/^www\./, '');
+    } catch (error) {
+      /* keine brauchbare Adresse */
+    }
+    const label = String(tab.title || host || '').trim();
+    const match = label.match(/[\p{L}\p{N}]/u);
+    box.textContent = match ? match[0].toUpperCase() : '?';
+    const seed = host || label || '?';
+    let hash = 0;
+    for (const ch of seed) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    box.style.setProperty('--mono', 'hsl(' + (hash % 360) + ' 52% 45%)');
+    return box;
+  }
+
   function prettyUrl(url) {
     let rest = url.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
     if (rest.endsWith('/') && rest.indexOf('/') === rest.length - 1) rest = rest.slice(0, -1);
@@ -141,13 +162,28 @@
     const title = node.querySelector('.title');
     if (title.textContent !== tab.title) title.textContent = tab.title;
     node.title = tab.title;
-    const key = tab.loading ? 'loading' : state.private ? 'private' : tab.favicon || 'none';
+    const hasFav = !state.private && typeof tab.favicon === 'string' && tab.favicon.startsWith('data:image/png;base64,');
+    // Angeheftete Tabs zeigen nur ein Symbol; ohne eigenes Seiten-Icon bekommen
+    // sie ein Buchstaben-Zeichen (hängt an Titel + Adresse, damit es mitwandert).
+    const key = tab.loading
+      ? 'loading'
+      : state.private
+        ? 'private'
+        : hasFav
+          ? tab.favicon
+          : tab.pinned
+            ? 'mono:' + (tab.title || '') + '|' + tab.url
+            : 'none';
     if (node.dataset.fav !== key) {
       node.dataset.fav = key;
       let fav;
       if (tab.loading) {
         fav = el('span', 'fav');
         fav.appendChild(el('span', 'spinner'));
+      } else if (hasFav) {
+        fav = favicon(tab.favicon, 'globe');
+      } else if (tab.pinned) {
+        fav = monogram(tab);
       } else {
         fav = favicon(state.private ? null : tab.favicon, 'globe');
       }
