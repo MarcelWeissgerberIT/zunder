@@ -216,6 +216,29 @@ body.fullscreen #tabstrip {
 .gc6 { --gc: #12a594; }
 .gc7 { --gc: #8b8d98; }
 
+/* Container nutzen dieselbe Palette wie die Tab-Gruppen. */
+.cc0 { --cc: #5b8def; }
+.cc1 { --cc: #e5484d; }
+.cc2 { --cc: #e9a23b; }
+.cc3 { --cc: #30a46c; }
+.cc4 { --cc: #d6409f; }
+.cc5 { --cc: #8e4ec6; }
+.cc6 { --cc: #12a594; }
+.cc7 { --cc: #8b8d98; }
+
+/* Ein Container-Tab trägt links einen schmalen Streifen in seiner Farbe –
+   unterscheidet sich so vom Gruppen-Streifen unten und verträgt sich mit ihm. */
+.tab.contained::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--cc);
+}
+
 .gchip {
   flex: none;
   display: flex;
@@ -1972,6 +1995,136 @@ body.sheet #scrim {
   flex: none;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* Container verwalten (Popup). */
+.cnh {
+  padding: 10px 12px 2px;
+  width: 320px;
+  box-sizing: border-box;
+  font-weight: 600;
+}
+
+.cnhint {
+  padding: 0 12px 8px;
+  width: 320px;
+  box-sizing: border-box;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cnlist {
+  padding: 2px 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.cnempty {
+  padding: 6px 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cnr {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.cnr:hover {
+  background: var(--hover);
+}
+
+.cndot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--cc);
+  cursor: pointer;
+}
+
+.cnname {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 6px;
+}
+
+.cnname:hover {
+  border-color: var(--line);
+}
+
+.cnname:focus {
+  border-color: var(--accent);
+  background: var(--field);
+  outline: none;
+}
+
+.cnbtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cnbtn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.cnbtn.danger:hover {
+  color: #e5484d;
+}
+
+.cnconfirm {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px 2px;
+}
+
+.cnconfirm .q {
+  flex: 1 1 auto;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.cnadd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.cnadd .cnname {
+  border-color: var(--line);
 }
 
 #reader.on,

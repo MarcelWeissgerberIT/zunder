@@ -162,12 +162,48 @@ pub struct TabGroup {
     pub collapsed: bool,
 }
 
+/// Ein Container: ein Name, eine Farbe und eine Kennung für seinen eigenen,
+/// dauerhaften Datenspeicher. Tabs in diesem Container sind von allem anderen
+/// getrennt – so lassen sich etwa zwei Konten derselben Website gleichzeitig
+/// offen halten. Dauerhaft gesichert (`app_records`), gilt für alle Fenster.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Container {
+    pub id: u32,
+    pub name: String,
+    /// Eine von acht Farben der Oberfläche (0–7).
+    pub color: u8,
+    /// Kennung (UUID) des dauerhaften WebKit-Datenspeichers dieses Containers.
+    pub uuid: String,
+}
+
+impl Container {
+    /// Lädt die gesicherten Container, nach Kennung geordnet.
+    fn load(store: &Store) -> Vec<Container> {
+        let mut list: Vec<Container> = Vec::new();
+        if let Some((records, _)) = store.app_records("container", "", 64, 64 * 1024) {
+            for (_id, data) in records {
+                if let Ok(container) = serde_json::from_str::<Container>(&data) {
+                    if !container.uuid.is_empty() {
+                        list.push(container);
+                    }
+                }
+            }
+        }
+        list.sort_by_key(|container| container.id);
+        list
+    }
+}
+
 pub struct Tab {
     pub id: TabId,
     /// Angeheftet: steht schmal ganz links und kommt nach jedem Start wieder.
     pub pinned: bool,
     /// Gehört zu dieser Tab-Gruppe des Fensters.
     pub group: Option<u32>,
+    /// Läuft in diesem Container – mit eigenem, dauerhaftem Datenspeicher, von
+    /// allem anderen getrennt. `None`: das normale Profil. Nur in gewöhnlichen
+    /// Fenstern (private und Stealth-Fenster haben ohnehin eigene Speicher).
+    pub container: Option<u32>,
     /// Entsteht erst, wenn der Tab zum ersten Mal gezeigt wird.
     pub webview: Option<WebView>,
     /// Zuletzt übernommene Adresse – oder die, die beim ersten Zeigen geladen wird.
@@ -230,6 +266,7 @@ impl Tab {
             id,
             pinned: false,
             group: None,
+            container: None,
             webview: None,
             url,
             pending: None,
@@ -602,6 +639,8 @@ struct SessionTab {
     pinned: bool,
     #[serde(default)]
     group: Option<u32>,
+    #[serde(default)]
+    container: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -633,6 +672,8 @@ pub struct App {
     pub proxy: EventLoopProxy<UserEvent>,
     pub store: Store,
     pub settings: Settings,
+    /// Die eingerichteten Container (Name, Farbe, Datenspeicher-Kennung).
+    pub containers: Vec<Container>,
     pub windows: HashMap<WindowId, BrowserWindow>,
     /// Fenster in der Reihenfolge ihrer letzten Benutzung, das aktuelle zuletzt.
     pub focus_order: Vec<WindowId>,
@@ -879,6 +920,7 @@ impl App {
             Store::open(&data_dir).expect("Datenbank lässt sich nicht anlegen")
         });
         let settings = Settings::load(&store);
+        let containers = Container::load(&store);
         let debug = crate::dev::enabled();
         if debug {
             let debug_proxy = proxy.clone();
@@ -929,6 +971,7 @@ impl App {
             proxy,
             store,
             settings,
+            containers,
             windows: HashMap::new(),
             focus_order: Vec::new(),
             ids: Rc::new(Cell::new(0)),
@@ -1785,7 +1828,17 @@ impl App {
         // Dateien brauchen Lesezugriff auf ihren Ordner – das geht erst nach dem Anlegen.
         let is_file = url.starts_with("file://");
         let initial = if is_file { None } else { Some(url.as_str()) };
-        match build_content(&win.shared, tab.id, bounds, initial, None) {
+        // Ein Container-Tab eines gewöhnlichen Fensters bekommt den dauerhaften
+        // Datenspeicher seines Containers. In privaten und Stealth-Fenstern gilt
+        // das nicht – die haben ohnehin eigene, flüchtige Speicher.
+        let container_store = if private || win.stealth {
+            None
+        } else {
+            tab.container
+                .and_then(|id| self.containers.iter().find(|container| container.id == id))
+                .and_then(|container| native::container_store(&container.uuid))
+        };
+        match build_content(&win.shared, tab.id, bounds, initial, None, container_store) {
             Ok(webview) => {
                 // Die Anmeldung gilt genau dieser WebView. WebKit fragt erst
                 // nach dieser Zeile, ob sie die Adresse laden darf.
@@ -2292,6 +2345,117 @@ impl App {
         self.group_dissolve(id, group);
     }
 
+    // -----------------------------------------------------------------------
+    // Container
+    // -----------------------------------------------------------------------
+
+    /// Sichert einen Container dauerhaft. `true`, wenn es geklappt hat.
+    fn store_container(&self, container: &Container) -> bool {
+        let Ok(data) = serde_json::to_string(container) else {
+            return false;
+        };
+        matches!(
+            self.store.put_app_record("container", &container.id.to_string(), &data, 64),
+            crate::store::RecordPut::Stored
+        )
+    }
+
+    /// Container sind für alle Fenster gleich – nach einer Änderung bekommen alle
+    /// den neuen Stand.
+    fn containers_changed(&mut self) {
+        for win in self.windows.values_mut() {
+            win.dirty = true;
+        }
+    }
+
+    /// Legt einen neuen Container an (Name, nächste Farbe, eigene Kennung).
+    pub fn container_new(&mut self, name: &str) {
+        if self.containers.len() >= 24 {
+            return;
+        }
+        let name: String = name.chars().filter(|c| !c.is_control()).take(40).collect();
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let id = self.containers.iter().map(|container| container.id).max().unwrap_or(0) + 1;
+        let color = (self.containers.len() as u8) % 8;
+        let uuid = native::new_uuid();
+        if uuid.is_empty() {
+            return;
+        }
+        let container = Container { id, name, color, uuid };
+        if self.store_container(&container) {
+            self.containers.push(container);
+            self.containers_changed();
+        }
+    }
+
+    /// Benennt einen Container um oder färbt ihn neu.
+    pub fn container_edit(&mut self, id: u32, name: Option<&str>, color: Option<u8>) {
+        let Some(container) = self.containers.iter_mut().find(|container| container.id == id) else {
+            return;
+        };
+        if let Some(name) = name {
+            let name: String = name.chars().filter(|c| !c.is_control()).take(40).collect();
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                container.name = name;
+            }
+        }
+        if let Some(color) = color {
+            container.color = color % 8;
+        }
+        let snapshot = container.clone();
+        self.store_container(&snapshot);
+        self.containers_changed();
+    }
+
+    /// Löscht einen Container und leert seinen Datenspeicher. Tabs, die darin
+    /// liefen, kehren ins normale Profil zurück (ihre offenen Seiten erst beim
+    /// nächsten Laden).
+    pub fn container_delete(&mut self, id: u32) {
+        let Some(position) = self.containers.iter().position(|container| container.id == id) else {
+            return;
+        };
+        let container = self.containers.remove(position);
+        self.store.remove_app_record("container", &id.to_string());
+        native::clear_container_data(&container.uuid);
+        for win in self.windows.values_mut() {
+            for tab in &mut win.tabs {
+                if tab.container == Some(id) {
+                    tab.container = None;
+                }
+            }
+        }
+        self.session_changed();
+        self.containers_changed();
+    }
+
+    /// Öffnet einen neuen Tab in diesem Container. Gilt nur in gewöhnlichen
+    /// Fenstern – private und Stealth-Fenster kennen keine Container.
+    pub fn new_container_tab(&mut self, id: WindowId, container: u32) {
+        let ordinary = self.windows.get(&id).is_some_and(|win| !win.private && !win.stealth);
+        if !ordinary || !self.containers.iter().any(|entry| entry.id == container) {
+            return;
+        }
+        self.refresh_newtab();
+        let Some(win) = self.windows.get_mut(&id) else {
+            return;
+        };
+        let url = loadable("", win.private);
+        let mut tab = Tab::new(win.shared.next_id(), url);
+        tab.container = Some(container);
+        let new_id = tab.id;
+        let position = win.tabs.len();
+        win.tabs.insert(position, tab);
+        win.tidy_tabs();
+        let position = win.tabs.iter().position(|tab| tab.id == new_id).unwrap_or(position);
+        win.dirty = true;
+        self.activate_tab(id, position);
+        self.session_changed();
+    }
+
     /// Sagt allen Fenstern, wie es um die Filterlisten steht (für die Einstellungen).
     pub fn send_filter_info(&mut self) {
         let info = self.blocker.info();
@@ -2599,6 +2763,7 @@ impl App {
                     "url": omnibox::pretty_url(tab.shown_url()),
                     "pinned": tab.pinned,
                     "group": tab.group,
+                    "container": tab.container,
                 })
             })
             .collect();
@@ -2658,11 +2823,19 @@ impl App {
                 .collect()
         });
         let assistant_width = win.assistant_width();
+        // Die eingerichteten Container – damit die Oberfläche sie anbietet und
+        // den Tabs ihre Farbe gibt.
+        let containers: Vec<Value> = self
+            .containers
+            .iter()
+            .map(|container| json!({ "id": container.id, "name": container.name, "color": container.color }))
+            .collect();
         let state = json!({
             "t": "state",
             "tabs": tabs,
             "active": active.id,
             "groups": win.groups,
+            "containers": containers,
             "private": win.private,
             "stealth": win.stealth,
             "tor": win.tor,
@@ -2947,6 +3120,7 @@ impl App {
                     title: tab.title.clone(),
                     pinned: tab.pinned,
                     group: tab.group,
+                    container: tab.container,
                 })
                 .collect();
             let scale = win.window.scale_factor();
@@ -2995,7 +3169,8 @@ impl App {
                 window.groups.clear();
                 window.active = 0;
             }
-            let saved: Vec<(bool, Option<u32>)> = window.tabs.iter().map(|tab| (tab.pinned, tab.group)).collect();
+            let saved: Vec<(bool, Option<u32>, Option<u32>)> =
+                window.tabs.iter().map(|tab| (tab.pinned, tab.group, tab.container)).collect();
             let groups: Vec<TabGroup> = window
                 .groups
                 .iter()
@@ -3024,9 +3199,10 @@ impl App {
                 continue;
             };
             if let Some(win) = self.windows.get_mut(&id) {
-                for (tab, (pinned, group)) in win.tabs.iter_mut().zip(saved) {
+                for (tab, (pinned, group, container)) in win.tabs.iter_mut().zip(saved) {
                     tab.pinned = pinned;
                     tab.group = group;
+                    tab.container = container;
                 }
                 win.groups = groups;
                 win.tidy_tabs();

@@ -134,6 +134,10 @@
     return (state.groups || []).find((group) => group.id === id) || null;
   }
 
+  function containerOf(id) {
+    return (state.containers || []).find((container) => container.id === id) || null;
+  }
+
   // Der Kopf einer Tab-Gruppe: Farbe und Name; ein Klick klappt sie zu oder auf.
   function groupChip(group, count) {
     let node = groupNodes.get(group.id);
@@ -158,11 +162,15 @@
     node.className = node.className.replace(/ ?gc[0-7]/g, '') + (group ? ' gc' + group.color : '');
     node.classList.toggle('grouped', !!group);
     node.hidden = !!(group && group.collapsed);
+    // Container: ein farbiger Streifen am Tab zeigt, in welchem er läuft.
+    const container = tab.container ? containerOf(tab.container) : null;
+    node.className = node.className.replace(/ ?cc[0-7]/g, '') + (container ? ' cc' + container.color : '');
+    node.classList.toggle('contained', !!container);
     // Steht der Tab neben dem aktiven im Fenster, sieht man ihm das an.
     node.classList.toggle('paired', !!tab.paired && tab.id !== state.active);
     const title = node.querySelector('.title');
     if (title.textContent !== tab.title) title.textContent = tab.title;
-    node.title = tab.title;
+    node.title = container ? tab.title + ' · ' + container.name : tab.title;
     const hasFav = !state.private && typeof tab.favicon === 'string' && tab.favicon.startsWith('data:image/png;base64,');
     // Angeheftete Tabs zeigen nur ein Symbol; ohne eigenes Seiten-Icon bekommen
     // sie ein Buchstaben-Zeichen (hängt an Titel + Adresse, damit es mitwandert).
@@ -745,6 +753,13 @@
     renderAmpel(next.ampel);
     renderCheck(next.check);
     renderShield(next.shield);
+    // Das Container-Fenster zeigt immer den aktuellen Stand – nur nicht,
+    // während gerade ein Name getippt wird (das würde die Eingabe stören).
+    if (ui.menu === 'containers') {
+      const active = document.activeElement;
+      const typing = active && active.classList && active.classList.contains('cnname');
+      if (!typing) fillContainers();
+    }
     renderSplitBar(next);
     const reader = $('reader');
     reader.hidden = !next.canRead;
@@ -840,6 +855,11 @@
     box.appendChild(menuItem(S.m_command_palette, 'search', '⌘K', openPalette));
     box.appendChild(menuItem(S.m_tab_search, 'tabs', '⇧⌘A', openTabSearch));
     box.appendChild(menuItem(S.m_tab_overview, 'grid', '⇧⌘\\', openOverview));
+    // Container gibt es nur in gewöhnlichen Fenstern – private und
+    // Stealth-Fenster haben ohnehin eigene, getrennte Speicher.
+    if (state && !state.private && !state.stealth) {
+      box.appendChild(menuItem(S.m_containers, 'window', '', openContainers));
+    }
     sep();
     box.appendChild(menuItem(S.p_history, 'history', '⌘Y', () => togglePanel('history')));
     box.appendChild(menuItem(S.p_bookmarks, 'bookmark', '⌥⌘B', () => togglePanel('bookmarks')));
@@ -1311,6 +1331,137 @@
     closeTabSearch();
     syncOverlay();
     setTimeout(() => field.select(), 30);
+  }
+
+  // Container verwalten: anlegen, umbenennen, umfärben, löschen – und einen
+  // neuen Tab in einem Container öffnen. Jeder Container hat seinen eigenen,
+  // dauerhaften Datenspeicher.
+  function openContainers() {
+    const box = $('popup');
+    box.textContent = '';
+    box.appendChild(el('div', 'cnh', S.cn_title));
+    box.appendChild(el('div', 'cnhint', S.cn_hint));
+    const list = el('div', 'cnlist');
+    list.id = 'cn-list';
+    box.appendChild(list);
+    fillContainers();
+
+    const add = el('div', 'cnadd');
+    const field = document.createElement('input');
+    field.type = 'text';
+    field.className = 'cnname';
+    field.placeholder = S.cn_add_name;
+    field.maxLength = 40;
+    field.spellcheck = false;
+    const create = () => {
+      const value = field.value.trim();
+      if (value) {
+        post({ c: 'containerNew', name: value });
+        field.value = '';
+      }
+    };
+    field.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') create();
+      event.stopPropagation();
+    });
+    add.appendChild(field);
+    const addBtn = el('button', 'cnbtn');
+    addBtn.type = 'button';
+    addBtn.title = S.cn_add;
+    addBtn.appendChild(icon('plus', 'sm'));
+    addBtn.addEventListener('click', create);
+    add.appendChild(addBtn);
+    box.appendChild(add);
+
+    const anchor = $('menu').getBoundingClientRect();
+    box.style.top = anchor.bottom + 8 + 'px';
+    box.style.right = Math.max(8, window.innerWidth - anchor.right) + 'px';
+    box.style.left = 'auto';
+    box.hidden = false;
+    ui.menu = 'containers';
+    closePanel();
+    closeTabSearch();
+    syncOverlay();
+  }
+
+  // Baut die Liste der Container neu auf – auch bei jeder Zustandsmeldung,
+  // solange das Fenster offen ist und gerade kein Name bearbeitet wird.
+  function fillContainers() {
+    const list = document.getElementById('cn-list');
+    if (!list) return;
+    list.textContent = '';
+    const containers = (state && state.containers) || [];
+    if (!containers.length) {
+      list.appendChild(el('div', 'cnempty', S.cn_empty));
+      return;
+    }
+    for (const container of containers) {
+      let color = container.color;
+      const row = el('div', 'cnr cc' + color);
+      const dot = el('button', 'cndot');
+      dot.type = 'button';
+      dot.title = S.cn_color;
+      dot.addEventListener('click', (event) => {
+        event.stopPropagation();
+        color = (color + 1) % 8;
+        row.className = 'cnr cc' + color;
+        post({ c: 'containerColor', id: container.id, color });
+      });
+      row.appendChild(dot);
+      const name = document.createElement('input');
+      name.type = 'text';
+      name.className = 'cnname';
+      name.value = container.name;
+      name.maxLength = 40;
+      name.spellcheck = false;
+      name.title = S.cn_rename;
+      const rename = () => {
+        const value = name.value.trim();
+        if (value && value !== container.name) post({ c: 'containerRename', id: container.id, name: value });
+      };
+      name.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          rename();
+          name.blur();
+        }
+        event.stopPropagation();
+      });
+      name.addEventListener('blur', rename);
+      row.appendChild(name);
+      const open = el('button', 'cnbtn');
+      open.type = 'button';
+      open.title = S.cn_new_tab;
+      open.appendChild(icon('plus', 'sm'));
+      open.addEventListener('click', () => {
+        closeMenu();
+        post({ c: 'newContainerTab', id: container.id });
+      });
+      row.appendChild(open);
+      const del = el('button', 'cnbtn danger');
+      del.type = 'button';
+      del.title = S.cn_delete;
+      del.appendChild(icon('trash', 'sm'));
+      del.addEventListener('click', () => confirmContainerDelete(row, container.id));
+      row.appendChild(del);
+      list.appendChild(row);
+    }
+  }
+
+  function confirmContainerDelete(row, id) {
+    if (row.querySelector('.cnconfirm')) return;
+    const bar = el('div', 'cnconfirm');
+    bar.appendChild(el('span', 'q', S.cn_delete_ask));
+    const yes = el('button', 'cnbtn danger', S.cn_delete_yes);
+    yes.type = 'button';
+    yes.addEventListener('click', () => {
+      closeMenu();
+      post({ c: 'containerDelete', id });
+    });
+    const no = el('button', 'cnbtn', S.cn_delete_no);
+    no.type = 'button';
+    no.addEventListener('click', () => bar.remove());
+    bar.append(yes, no);
+    row.appendChild(bar);
   }
 
   function closeMenu() {

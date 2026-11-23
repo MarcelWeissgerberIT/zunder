@@ -14,7 +14,7 @@ use objc2::ffi;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
 use objc2::{class, msg_send, sel, MainThreadMarker};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSUUID};
 use objc2_web_kit::{WKWebViewConfiguration, WKWebsiteDataStore};
 use tao::event_loop::EventLoopProxy;
 use wry::{WebView, WebViewExtMacOS};
@@ -603,6 +603,69 @@ pub fn bring_to_front(webview: &WebView) {
 /// Platte landet.
 pub fn private_store() -> Retained<WKWebsiteDataStore> {
     unsafe { WKWebsiteDataStore::nonPersistentDataStore(mtm()) }
+}
+
+thread_local! {
+    /// Die dauerhaften Datenspeicher der Container – je Kennung (UUID) genau
+    /// einer, über alle Tabs desselben Containers hinweg derselbe, damit sie
+    /// Cookies und Anmeldungen teilen.
+    static CONTAINER_STORES: RefCell<HashMap<String, Retained<WKWebsiteDataStore>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Der dauerhafte, abgeschottete Datenspeicher eines Containers
+/// (`dataStoreForIdentifier:`, seit macOS 14). Seine Cookies und Anmeldungen
+/// überdauern Neustarts und sind von allem anderen getrennt. Alle Tabs eines
+/// Containers teilen denselben Speicher. `None`, wenn die Kennung unbrauchbar
+/// ist (WebKit wirft bei der Null-Kennung eine Ausnahme – die fangen wir hier
+/// vorher ab).
+pub fn container_store(uuid: &str) -> Option<Retained<WKWebsiteDataStore>> {
+    if uuid.is_empty() || uuid.bytes().all(|b| b == b'0' || b == b'-') {
+        return None;
+    }
+    CONTAINER_STORES.with(|cache| {
+        if let Some(store) = cache.borrow().get(uuid) {
+            return Some(store.clone());
+        }
+        let store = unsafe {
+            let alloc: *mut AnyObject = msg_send![class!(NSUUID), alloc];
+            let id: *mut NSUUID = msg_send![alloc, initWithUUIDString: &*ns(uuid)];
+            let id = Retained::from_raw(id)?;
+            WKWebsiteDataStore::dataStoreForIdentifier(&id, mtm())
+        };
+        cache.borrow_mut().insert(uuid.to_string(), store.clone());
+        Some(store)
+    })
+}
+
+/// Leert den Datenspeicher eines Containers (Cookies, Website-Daten,
+/// Zwischenspeicher) – wird beim Löschen eines Containers aufgerufen. Erst
+/// sinnvoll, wenn kein Tab ihn mehr nutzt; wirkt im Hintergrund.
+pub fn clear_container_data(uuid: &str) {
+    let Some(store) = container_store(uuid) else {
+        return;
+    };
+    CONTAINER_STORES.with(|cache| {
+        cache.borrow_mut().remove(uuid);
+    });
+    unsafe {
+        let types: Retained<AnyObject> = msg_send![class!(WKWebsiteDataStore), allWebsiteDataTypes];
+        let since: Retained<AnyObject> = msg_send![class!(NSDate), distantPast];
+        let done = block2::RcBlock::new(|| {});
+        let _: () = msg_send![&*store, removeDataOfTypes: &*types, modifiedSince: &*since, completionHandler: &*done];
+    }
+}
+
+/// Eine neue, zufällige Kennung (UUID) – für den Datenspeicher eines Containers.
+pub fn new_uuid() -> String {
+    unsafe {
+        let id: *mut AnyObject = msg_send![class!(NSUUID), new];
+        let Some(id) = Retained::from_raw(id) else {
+            return String::new();
+        };
+        let text: Obj = msg_send![&*id, UUIDString];
+        string_of(text)
+    }
 }
 
 /// Konfiguration für einen Inhalts-Tab.

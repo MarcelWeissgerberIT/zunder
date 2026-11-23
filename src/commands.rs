@@ -170,6 +170,11 @@ impl App {
             "groupColor" => self.group_edit(window, number("id").max(0) as u32, None, Some(number("color").clamp(0, 7) as u8)),
             "groupDissolve" => self.group_dissolve(window, number("id").max(0) as u32),
             "groupClose" => self.group_close(window, number("id").max(0) as u32),
+            "newContainerTab" => self.new_container_tab(window, number("id").max(0) as u32),
+            "containerNew" => self.container_new(&text("name")),
+            "containerRename" => self.container_edit(number("id").max(0) as u32, Some(&text("name")), None),
+            "containerColor" => self.container_edit(number("id").max(0) as u32, None, Some(number("color").clamp(0, 7) as u8)),
+            "containerDelete" => self.container_delete(number("id").max(0) as u32),
             "cmd" => self.command(Some(window), &text("id"), target),
             "find" => self.find(window, &text("text"), flag("back")),
             "findClose" => {

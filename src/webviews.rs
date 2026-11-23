@@ -308,13 +308,17 @@ pub fn build_content(
     bounds: Rect,
     url: Option<&str>,
     config: Option<Retained<WKWebViewConfiguration>>,
+    container_store: Option<Retained<WKWebsiteDataStore>>,
 ) -> wry::Result<WebView> {
     // Ließ sich der Tunnel für diesen Tab nicht einrichten, lädt er gar nichts
     // – lieber keine Seite als eine, die am Tunnel vorbeigeht.
     let unrouted = std::cell::Cell::new(false);
     let config = config.unwrap_or_else(|| {
         if !shared.stealth {
-            return native::content_config(shared.store.as_deref(), &shared.ua_suffix, false);
+            // Ein Container-Tab bekommt den eigenen, dauerhaften Speicher seines
+            // Containers; sonst den des Fensters (privat) bzw. das normale Profil.
+            let store = container_store.as_deref().or(shared.store.as_deref());
+            return native::content_config(store, &shared.ua_suffix, false);
         }
         // Stealth: eine eigene Insel je Tab – und ihr Verkehr durch den Tunnel.
         let island = native::private_store();
@@ -385,7 +389,7 @@ pub fn build_content(
             let id = popup_shared.next_id();
             let config = features.opener.target_configuration.clone();
             native::own_controller(&config, popup_shared.stealth);
-            match build_content(&popup_shared, id, rect(0.0, 0.0, 800.0, 600.0), None, Some(config)) {
+            match build_content(&popup_shared, id, rect(0.0, 0.0, 800.0, 600.0), None, Some(config), None) {
                 Ok(webview) => {
                     // Die Schutzlisten sofort – der erste Abruf des neuen Tabs läuft gleich los.
                     crate::blocker::equip(&webview, &url, true);
