@@ -878,12 +878,35 @@ impl App {
                 } else {
                     let (proxy, id) = (self.proxy.clone(), app.id);
                     std::thread::spawn(move || {
-                        let result = crate::security::scan(&input);
+                        // Selbst bei einer Panik in `scan` wird die Zählung freigegeben.
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::security::scan(&input)))
+                            .unwrap_or_else(|_| json!({ "state": "failed" }));
                         crate::security::finish();
                         let _ = proxy.send_event(crate::app::UserEvent::Scan { window, tab: tab_id, app: id, n, result });
                     });
                     // Bis das Ergebnis da ist: „läuft“ – die Seite zeigt so lange, dass geprüft wird.
                     self.app_reply(window, tab_id, app.id, n, json!({ "state": "scanning" }));
+                }
+            }
+            // Der Browser schickt eine frei zusammengestellte Anfrage und reicht
+            // die rohe Antwort zurück. Wie beim Scan: im Hintergrund, begrenzt,
+            // im Stealth-Fenster gar nicht.
+            Op::Request(input) => {
+                if !app.requests {
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "refused" }));
+                } else if stealth {
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "refused", "why": "stealth" }));
+                } else if !crate::inspect::begin() {
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "busy" }));
+                } else {
+                    let (proxy, id) = (self.proxy.clone(), app.id);
+                    std::thread::spawn(move || {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::inspect::run(&input)))
+                            .unwrap_or_else(|_| json!({ "state": "failed" }));
+                        crate::inspect::finish();
+                        let _ = proxy.send_event(crate::app::UserEvent::Inspect { window, tab: tab_id, app: id, n, result });
+                    });
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "sending" }));
                 }
             }
             Op::Forget => {

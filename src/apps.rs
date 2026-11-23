@@ -53,6 +53,10 @@ pub struct App {
     /// der Sicherheitscheck. Der Abruf macht der Browser (`security.rs`), nie
     /// die Seite der App.
     pub scans: bool,
+    /// Darf sie den Browser eine frei zusammengestellte HTTP-Anfrage schicken
+    /// lassen und die rohe Antwort sehen? Nur der Request-Inspektor
+    /// (`inspect.rs`).
+    pub requests: bool,
 }
 
 pub const APPS: &[App] = &[
@@ -78,6 +82,7 @@ pub const APPS: &[App] = &[
         records: 0,
         exports: &[],
         scans: false,
+        requests: false,
     },
     // Zeiterfassung: Sie geht gar nicht ins Netz. Was gebucht ist, liegt als
     // Karteikarten beim Browser – genug für viele Jahre.
@@ -95,6 +100,7 @@ pub const APPS: &[App] = &[
         // Die Zeiten als Tabelle.
         exports: &["csv"],
         scans: false,
+        requests: false,
     },
     // Sicherheitscheck: ruft eine Adresse ab und prüft sie – damit man die
     // eigenen Seiten härten kann. Der Abruf macht der Browser, nicht die Seite.
@@ -113,6 +119,25 @@ pub const APPS: &[App] = &[
         // Die Schwachstellen als Markdown zum Weiterarbeiten.
         exports: &["md"],
         scans: true,
+        requests: false,
+    },
+    // Request-Inspektor: eine HTTP-Anfrage zusammenstellen und die rohe Antwort
+    // sehen – wie `curl`, für die eigenen Schnittstellen. Der Browser schickt sie.
+    App {
+        id: "request",
+        name: "app_request",
+        about: "app_request_about",
+        icon: "send",
+        page: "app-request.html",
+        files: &["apps.css", "apps.js", "app-request.css", "app-request.js"],
+        connect: &[],
+        images: &[],
+        location: false,
+        // Zuletzt benutzte Anfragen merken (Methode und Adresse, keine Kopfzeilen).
+        records: 200,
+        exports: &[],
+        scans: false,
+        requests: true,
     },
 ];
 
@@ -255,6 +280,9 @@ pub enum Op {
     FileName(String),
     /// Den Browser bitten, eine Adresse abzurufen und auf Sicherheit zu prüfen.
     Scan(String),
+    /// Den Browser eine frei zusammengestellte HTTP-Anfrage schicken lassen (das
+    /// JSON-Objekt der Anfrage als Text; `inspect.rs` liest es).
+    Request(String),
 }
 
 /// Eine Anfrage: laufende Nummer (unter der die Antwort zurückkommt) und Wunsch.
@@ -300,6 +328,16 @@ fn wish(value: &Value) -> Option<Op> {
         "remove" => Op::Remove(record_id(text("id")?)?),
         "filename" => Op::FileName(file_name(text("name")?)?),
         "scan" => Op::Scan(scan_target(text("url")?)?),
+        "request" => {
+            // Das ganze Anfrage-Objekt {method,url,headers,body} als Text weiter;
+            // geprüft wird es erst beim Senden (`inspect::run`).
+            let payload = value.get("req").filter(|value| value.is_object())?;
+            let text = serde_json::to_string(payload).ok()?;
+            if text.len() > 4096 {
+                return None;
+            }
+            Op::Request(text)
+        }
         _ => return None,
     })
 }
@@ -594,6 +632,7 @@ mod tests {
             ("app-weather.js", include_str!("../ui/app-weather.js")),
             ("app-time.js", include_str!("../ui/app-time.js")),
             ("app-security.js", include_str!("../ui/app-security.js")),
+            ("app-request.js", include_str!("../ui/app-request.js")),
         ];
         for (name, script) in scripts {
             let keys = text_keys(script);
@@ -629,6 +668,11 @@ mod tests {
         assert!(security.scans && security.connect.is_empty() && security.images.is_empty() && !security.location);
         assert!(!by_id("weather").unwrap().scans && !time.scans);
         assert_eq!(url_of("security"), "zunder://app-security/");
+        // Der Request-Inspektor darf Anfragen schicken – als einzige App; ohne Netz der Seite.
+        let inspector = by_id("request").unwrap();
+        assert!(inspector.requests && inspector.connect.is_empty() && !inspector.scans);
+        assert!(!security.requests && !by_id("weather").unwrap().requests);
+        assert_eq!(url_of("request"), "zunder://app-request/");
         // Dateien sichert nur die Zeiterfassung – als Tabelle, sonst nichts.
         assert!(may_export(time, "zeiten-2026-11.csv") && may_export(time, "ZEITEN.CSV"));
         for name in ["zeiten.html", "zeiten.csv.app", "zeiten.command", "zeiten", "csv"] {

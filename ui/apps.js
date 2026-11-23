@@ -129,6 +129,19 @@
       return call('scan', { url }, { timeout: 60000, progress, done: (answer) => answer.state !== 'scanning' });
     },
 
+    // Lässt den Browser eine frei zusammengestellte HTTP-Anfrage schicken (nur
+    // der Request-Inspektor darf das) und gibt die rohe Antwort zurück. `req`
+    // ist { method, url, headers: [[k,v],…], body }. Passt die Anfrage nicht
+    // durch den Kanal der Seiten (höchstens ~4 KB), kommt 'too_big' zurück,
+    // ohne dass etwas ins Netz geht.
+    request(req, progress) {
+      const message = 'A:' + JSON.stringify({ n: 0, op: 'request', req });
+      // Der Kanal zählt in Bytes (UTF-8), nicht in Zeichen – mehrbytige Zeichen
+      // sonst durchrutschen und die Nachricht würde still verworfen.
+      if (new TextEncoder().encode(message).length > 4000) return Promise.resolve({ state: 'too_big' });
+      return call('request', { req }, { timeout: 35000, progress, done: (answer) => answer.state !== 'sending' });
+    },
+
     // Die Karteikarten der App (wo für sie welche eingetragen sind): viele
     // kleine Einträge, jeder ein Objekt unter seiner Kennung aus Buchstaben,
     // Ziffern, „-“ und „_“.

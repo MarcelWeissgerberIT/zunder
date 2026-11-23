@@ -74,11 +74,10 @@ Damit läuft das heutige Web vollständig, und die App startet sofort.
   „Erneut versuchen“, Rückfrage vor dem Öffnen anderer Programme.
 - Hell und dunkel nach Systemeinstellung, Oberfläche deutsch oder englisch.
 - **Eingebaute Apps**: eigene Seiten des Browsers mit genau benannten Rechten.
-  Es gibt drei: Wetter und Regenradar – mit eigenem Standort oder Postleitzahl –,
-  eine Zeiterfassung, in der man Zeiten in einer Zeile bucht (⌥⌘Z) und deren
-  Daten beim Browser auf dem Mac bleiben, und einen Sicherheitscheck, der die
-  Schutzschichten einer Website prüft – damit man die eigenen Seiten härten kann
-  (siehe [Eingebaute Apps](#eingebaute-apps)).
+  Es gibt vier: Wetter und Regenradar, eine Zeiterfassung (⌥⌘Z), ein
+  Sicherheitscheck, der die Schutzschichten einer Website prüft, und ein
+  Request-Inspektor für HTTP-Anfragen – beides, um die eigenen Seiten und
+  Schnittstellen zu härten (siehe [Eingebaute Apps](#eingebaute-apps)).
 - **Ladebild beim Start**: fünf Sekunden Animation – das App-Symbol „zündet“
   vor der Glut-Szene der Live-Hintergründe, der Schriftzug setzt sich, ein
   Balken füllt sich. Die Seiten laden währenddessen schon; ein Klick oder ein
@@ -637,8 +636,9 @@ sich dann wie mit ihr.)
 
 Eine App ist eine eigene Seite des Browsers in einem Tab – `zunder://app-…/` –,
 geladen aus dem Programm selbst. Man öffnet sie über ihre Kachel auf der
-Startseite, über „Ablage“ im Menü oder über ihre Adresse. Es gibt drei:
-**Wetter und Regenradar**, die **Zeiterfassung** und den **Sicherheitscheck**.
+Startseite, über „Ablage“ im Menü oder über ihre Adresse. Es gibt vier:
+**Wetter und Regenradar**, die **Zeiterfassung**, den **Sicherheitscheck** und
+den **Request-Inspektor**.
 
 ### Was eine App darf
 
@@ -665,9 +665,10 @@ Mehr als eine Webseite, aber nur, was für sie eingetragen ist
   Endung, die für sie eingetragen ist (die Zeiterfassung: `csv`, der
   Sicherheitscheck: `md`), und nur über den gewöhnlichen Weg der Downloads – in
   den Download-Ordner, ohne eine vorhandene Datei zu überschreiben.
-- **Abrufen:** Nur der Sicherheitscheck darf den Browser bitten, eine Adresse
-  abzurufen und zu prüfen. Den Abruf macht der Browser selbst (`src/security.rs`),
-  nie die Seite der App; im Stealth-Fenster gar nicht.
+- **Abrufen:** Der Sicherheitscheck darf den Browser bitten, eine Adresse
+  abzurufen und zu prüfen, der Request-Inspektor, eine frei zusammengestellte
+  Anfrage zu schicken. Den Abruf macht der Browser selbst (`src/security.rs`,
+  `src/inspect.rs`), nie die Seite der App; im Stealth-Fenster gar nicht.
 
 Laden kann eine App allein der Browser – nie eine Webseite, weder im Tab noch
 in einem Rahmen oder einem neuen Fenster. Die Anmeldung, mit der der Browser
@@ -832,6 +833,34 @@ veralteter Bibliothek, Cookie ohne Schutz) und eine solide (grün); dazu die
 Fehlerfälle (keine Web-Adresse, nicht erreichbar), die Merkliste, privates und
 Stealth-Fenster, und einmal eine echte Adresse (`example.com`), um den Abruf im
 offenen Netz zu bestätigen.
+
+### Request-Inspektor
+
+Wie `curl`, nur im Browser: Man stellt eine HTTP-Anfrage zusammen – Methode,
+Adresse, Kopfzeilen, Rumpf – und sieht die rohe Antwort: Status, Dauer,
+Antwortkopf und Rumpf. Gedacht, um die **eigenen** Schnittstellen zu entwickeln
+und zu prüfen. Weil der Browser selbst abruft (`src/inspect.rs`) und nicht die
+Seite der App, gelten die Grenzen fremder Herkünfte (CORS) nicht – man sieht
+jede Antwort unverändert.
+
+- **Methoden:** GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS. Kopfzeilen frei,
+  bis auf die, die der Browser selbst setzt (`Host`, `Content-Length`,
+  `Connection` …) – so lässt sich nichts einschleusen oder verfälschen. Ein
+  JSON-Rumpf lässt sich mit einem Klick einrücken.
+- **Weitergeleitet wird nicht:** Eine 3xx-Antwort zeigt die App mit ihrem
+  `Location`, statt ihr zu folgen – beim Prüfen will man genau das sehen, was
+  der Server geantwortet hat.
+- **Grenzen:** Die Anfrage geht über den Kanal der Seiten (höchstens ~4 KB je
+  Nachricht), darum ist der Rumpf klein gehalten; die Antwort darf größer sein
+  (bis 512 KB werden gezeigt). Im Stealth-Fenster schickt die App nichts (die
+  Anfrage ginge am Tunnel vorbei). Zuletzt benutzte Anfragen merkt sie sich –
+  nur Methode und Adresse, keine Kopfzeilen und keinen Rumpf, damit keine
+  Zugangsdaten liegen bleiben; im privaten Fenster gar nichts.
+
+Geprüft im Probelauf gegen einen eigenen Server: POST mit eigener Kopfzeile und
+Rumpf (vom Server als JSON zurückgespiegelt), eine Weiterleitung (nicht
+gefolgt, `Location` im Kopf), ein 404, die Fehlerfälle (leere/unerreichbare
+Adresse, zu große Anfrage), die Merkliste, privates und Stealth-Fenster.
 
 ## Passwörter
 
@@ -1010,8 +1039,12 @@ Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
   nur ein Eintrag von heute. Am Anfang und am
   Ende der Zeile liest sie Zahlen als Zeit: Aus „3-4 Leute anrufen“ wird eine
   Buchung von 3 bis 4 Uhr – die Vorschau zeigt es vor dem Buchen.
-- Es gibt drei eingebaute Apps; eine Schnittstelle für Apps von außen gibt
+- Es gibt vier eingebaute Apps; eine Schnittstelle für Apps von außen gibt
   es nicht.
+- **Request-Inspektor:** Der Rumpf einer Anfrage ist klein (der Kanal der
+  Seiten fasst höchstens ~4 KB je Nachricht); für große Hochladungen ist die
+  App nicht gedacht. Weitergeleitet wird nicht (bewusst). Prüfe nur
+  Schnittstellen, die dir gehören oder für die du die Erlaubnis hast.
 - **Sicherheitscheck:** Er prüft die Schutzschichten von außen, nicht das
   Programm hinter der Website – eingeschleust, durchprobiert oder belastet wird
   nichts. Die Fassung der TLS-Verbindung liest er nicht (ob also noch TLS 1.0/1.1
@@ -1080,10 +1113,14 @@ Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
   (Anfrage, Antwortstrom, Fehlerfälle), nicht gegen den echten Dienst.
   Dasselbe gilt für „Anderer Dienst“ und die Anmeldung bei OpenRouter: geprüft
   gegen Nachbauten auf dem Mac, nicht gegen OpenAI, OpenRouter oder LM Studio.
-- Der API-Schlüssel und der Schlüssel des Passwort-Tresors hängen im
-  Schlüsselbund an der Signatur der App. Weil die App nur lokal signiert ist,
-  fragt macOS nach jedem Neubau einmal nach dem Passwort des Schlüsselbunds
-  („Immer erlauben“ gilt bis zum nächsten Neubau).
+- Einträge im Schlüsselbund (der API-Schlüssel, der Schlüssel des
+  Passwort-Tresors, und von WebKit angelegte Schlüssel wie der WebCrypto-Schlüssel
+  einer Seite) hängen an der Signatur der App. Wird mit einem **gleichbleibenden**
+  Zertifikat signiert (`bundle.sh` nimmt automatisch „Zunder Local“ oder eine
+  „Apple Development“-Identität, sonst `ZUNDER_SIGN_ID=<Name>`), behält macOS
+  „Immer erlauben“ über Neubauten hinweg. Nur **ad hoc** signiert (kein
+  Zertifikat vorhanden) ändert sich die Signatur bei jedem Neubau, und macOS
+  fragt dann nach jedem Einspielen erneut.
 - Wer am entsperrten Mac sitzt, kann ohne Touch ID Passwörter löschen und
   neue hinzufügen, aber keine lesen. Nach dem Ausfüllen steht ein Passwort im
   Feld der Seite – dort lässt es sich, wie in jedem Browser, sichtbar machen.
@@ -1139,6 +1176,7 @@ der Assistent bietet dann Ollama und Claude an.
 | `src/media.rs` | Kamera und Mikrofon je Website: wann gefragt, erlaubt oder abgelehnt wird (die Frage selbst stellt `src/native.rs`) |
 | `src/apps.rs` | Eingebaute Apps: welche es gibt, was jede darf (Netz, Standort, Speicher, Dateien sichern, Abrufen), ihre Adressen und Anfragen |
 | `src/security.rs` | Sicherheitscheck: eine Adresse abrufen, den Quelltext lesen und – mit `sitecheck` – bewerten; dazu ein paar gefahrlose aktive Prüfungen |
+| `src/inspect.rs` | Request-Inspektor: eine frei zusammengestellte HTTP-Anfrage schicken und die rohe Antwort zurückgeben |
 | `src/geo.rs` | Standort von macOS für eingebaute Apps – nie für Webseiten |
 | `src/pdfs.rs` | Eingebettete PDFs, die WebKit leer lässt: was der Browser annimmt, aufbewahrt und wieder herausgibt – und wann er einen Download absagt, den WebKit für ein eingebettetes PDF von sich aus beginnt (die Stellen selbst stehen in `src/native.rs`) |
 | `src/bookmarks_io.rs` | Lesezeichen aus anderen Browsern übernehmen und sichern |
@@ -1157,6 +1195,7 @@ der Assistent bietet dann Ollama und Claude an.
 | `ui/app-weather.*` | Die App „Wetter und Regenradar“ samt der Städteliste für das Radar |
 | `ui/app-time.*` | Die App „Zeiterfassung“ |
 | `ui/app-security.*` | Die App „Sicherheitscheck“ |
+| `ui/app-request.*` | Die App „Request-Inspektor“ |
 
 Ein Fenster besteht aus einer WebView für den Rahmen (Tab-Leiste,
 Adressleiste, Seitenleisten), einer WebView je Tab und – sobald sie zum ersten
@@ -1393,7 +1432,7 @@ in fester Form zeigen), die Regeln zu Kamera und Mikrofon (wann gefragt,
 erlaubt oder abgelehnt wird, wie lange ein Nein hält, unter welchem Namen
 sich Zunder eine Website merkt) und die Regeln für eingebettete PDFs (wer
 abliefern darf, was als PDF gilt, wer es wieder bekommt, was wann weicht –
-und welcher Download als ungefragt gilt – sowie die eingebauten Apps (Adressen, Schutzregel, Anfragen, Karteikarten, Dateinamen, Rundung des Standorts, Dateinamen, Abruf-Freigabe, Übersetzung aller Texte; dazu der Sicherheitscheck, der eine Seite abruft, ihren Quelltext liest und bewertet; 137 Tests).
+und welcher Download als ungefragt gilt – sowie die eingebauten Apps (Adressen, Schutzregel, Anfragen, Karteikarten, Dateinamen, Rundung des Standorts, Dateinamen, Abruf-Freigabe, Übersetzung aller Texte; dazu der Sicherheitscheck (eine Seite abrufen, Quelltext lesen, bewerten) und der Request-Inspektor (Methode, Adresse, Kopfzeilen und Rumpf prüfen und senden); 141 Tests).
 
 Der Name „Zunder“ ist ein Arbeitstitel. Er steht in `Cargo.toml`,
 `scripts/bundle.sh`, `src/menu.rs`, `src/i18n.rs` und im Schema `zunder://`.

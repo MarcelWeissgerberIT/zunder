@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title></title>
+<link rel="stylesheet" href="apps.css">
+<link rel="stylesheet" href="app-request.css">
+</head>
+<body>
+<!--ICONS-->
+<main>
+  <h1 id="title"></h1>
+
+  <section id="panel" class="card">
+    <form id="form">
+      <div id="line">
+        <select id="method" aria-label="Methode"></select>
+        <input id="url" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url">
+        <button id="send" type="submit" class="primary"></button>
+      </div>
+
+      <div class="head">
+        <span id="headers-title"></span>
+        <button id="add" type="button" class="ghost"></button>
+      </div>
+      <div id="headers"></div>
+
+      <label id="body-label" for="body"></label>
+      <textarea id="body" rows="4" spellcheck="false"></textarea>
+    </form>
+    <div id="recent"></div>
+  </section>
+
+  <p id="private-note" class="banner" hidden></p>
+
+  <section id="intro" class="card">
+    <svg class="big"><use href="#i-send"/></svg>
+    <h2 id="intro-title"></h2>
+    <p id="intro-text"></p>
+  </section>
+
+  <section id="busy" class="card" hidden>
+    <span class="spin"></span>
+    <span id="busy-text"></span>
+  </section>
+
+  <section id="trouble" class="card" hidden>
+    <svg><use href="#i-warning"/></svg>
+    <p id="trouble-text"></p>
+  </section>
+
+  <section id="result" class="card" hidden>
+    <div id="status-line">
+      <span id="status-dot"></span>
+      <strong id="status"></strong>
+      <span id="meta"></span>
+      <button id="copy" type="button" class="ghost"></button>
+    </div>
+    <p id="redirect" class="sub" hidden></p>
+    <h3 id="rh-title"></h3>
+    <div id="resp-headers"></div>
+    <div class="head">
+      <h3 id="rb-title"></h3>
+      <button id="format" type="button" class="ghost" hidden></button>
+    </div>
+    <pre id="resp-body"></pre>
+  </section>
+
+  <p id="note" class="note"></p>
+</main>
+
+<!--DATA-->
+<script src="apps.js"></script>
+<script src="app-request.js"></script>
+</body>
+</html>

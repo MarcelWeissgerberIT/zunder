@@ -95,6 +95,8 @@ pub enum UserEvent {
     Wake,
     /// Das Ergebnis eines Sicherheitschecks (aus dem Hintergrund) für die App.
     Scan { window: WindowId, tab: TabId, app: &'static str, n: u32, result: serde_json::Value },
+    /// Die Antwort auf eine Anfrage des Request-Inspektors (aus dem Hintergrund).
+    Inspect { window: WindowId, tab: TabId, app: &'static str, n: u32, result: serde_json::Value },
     /// Die Liste der Websites mit abgelegten Daten ist da (für die Seitenleiste).
     SiteData { window: WindowId, query: String, sites: Vec<(String, Vec<&'static str>)> },
     /// Website-Daten wurden gelöscht – die Liste neu holen.
@@ -1196,6 +1198,7 @@ impl App {
             }
             UserEvent::Geo(fix) => self.geo_arrived(fix),
             UserEvent::Scan { window, tab, app, n, result } => self.app_reply(window, tab, app, n, result),
+            UserEvent::Inspect { window, tab, app, n, result } => self.app_reply(window, tab, app, n, result),
             UserEvent::Reissue { window, tab, url } => {
                 if let Some(index) = self.tab_index(window, tab) {
                     self.load_quietly(window, index, &url);

@@ -8,8 +8,13 @@
 # README, Abschnitt Entwicklung):
 #   ZUNDER_HARNESS=1 ZUNDER_BUNDLE_ID=app.zunder.browser.test ZUNDER_DIST=<ordner> scripts/bundle.sh
 #
-# Die App wird nur lokal signiert (ad hoc). Das genügt, um sie auf dem
-# eigenen Mac zu starten; zum Weitergeben bräuchte es eine Apple-Entwickler-ID.
+# Signiert wird mit einem gleichbleibenden Code-Signing-Zertifikat, wenn eines
+# da ist (sonst ad hoc). Eine gleichbleibende Signatur sorgt dafür, dass der
+# Schlüsselbund von macOS seine Erlaubnis über Neubauten hinweg behält – sonst
+# fragt er nach jedem Einspielen neu (etwa nach dem WebCrypto-Schlüssel einer
+# Seite). Welches Zertifikat: ZUNDER_SIGN_ID="<Name>", sonst „Zunder Local“,
+# sonst „Apple Development“. Zum Weitergeben bräuchte es eine Entwickler-ID und
+# Notarisierung.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -57,6 +62,27 @@ if ls "$ROOT/assets/filters/"*.txt >/dev/null 2>&1; then
     cp "$ROOT/assets/filters/"*.txt "$APP/Contents/Resources/filters/"
 fi
 
+# Welche Signatur-Identität? Ein gleichbleibendes Zertifikat (Hash) oder ad hoc.
+# Reihenfolge: ZUNDER_SIGN_ID, dann ein selbst angelegtes „Zunder Local“, dann
+# die „Apple Development“-Identität. Nichts davon da: ad hoc wie bisher.
+IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+SIGN="-"
+SIGN_NAME="ad hoc"
+for WANT in "${ZUNDER_SIGN_ID:-}" "Zunder Local" "Apple Development"; do
+    [ -n "$WANT" ] || continue
+    HASH="$(printf '%s\n' "$IDENTITIES" | awk -v name="$WANT" 'index($0, name) { print $2; exit }')"
+    if [ -n "$HASH" ]; then
+        SIGN="$HASH"
+        SIGN_NAME="$WANT"
+        break
+    fi
+done
+if [ "$SIGN" = "-" ]; then
+    echo "Signatur: ad hoc (für eine gleichbleibende Signatur ZUNDER_SIGN_ID setzen oder ein Code-Signing-Zertifikat „Zunder Local“ anlegen)."
+else
+    echo "Signatur: $SIGN_NAME ($SIGN)."
+fi
+
 # Helfer für den Assistenten: spricht Apples Sprachmodell auf dem Gerät an
 # (ab macOS 26). Lässt er sich nicht bauen, läuft Zunder trotzdem – der
 # Assistent bietet dann nur Ollama und Claude an.
@@ -64,7 +90,7 @@ HELPER="$APP/Contents/MacOS/zunder-ai"
 if command -v swiftc >/dev/null 2>&1; then
     if swiftc -O -parse-as-library -target arm64-apple-macos26.0 -module-name ZunderAI \
         "$ROOT/helper/zunder-ai.swift" -o "$HELPER" 2>"$TARGET_DIR/zunder-ai.log"; then
-        codesign --force --options runtime --sign - "$HELPER" >/dev/null 2>&1
+        codesign --force --options runtime --sign "$SIGN" "$HELPER" >/dev/null 2>&1
     else
         rm -f "$HELPER"
         echo "Hinweis: Der Helfer für Apples Gerätemodell ließ sich nicht bauen (siehe $TARGET_DIR/zunder-ai.log)."
@@ -162,7 +188,7 @@ if [ -z "$SANDBOX" ]; then
     if [ -n "${ZUNDER_HARNESS:-}" ]; then SANDBOX=0; else SANDBOX=1; fi
 fi
 if [ "$SANDBOX" = "1" ]; then
-    codesign --force --options runtime --entitlements "$ROOT/assets/Zunder.entitlements" --sign - "$APP" >/dev/null 2>&1
+    codesign --force --options runtime --entitlements "$ROOT/assets/Zunder.entitlements" --sign "$SIGN" "$APP" >/dev/null 2>&1
     echo "Signiert mit Sandbox."
 else
     # Ohne Sandbox bleiben Kamera und Mikrofon trotzdem nutzbar.
@@ -176,7 +202,7 @@ else
     <key>com.apple.security.personal-information.location</key><true/>
 </dict></plist>
 ENTITLEMENTS
-    codesign --force --options runtime --entitlements "$ENT" --sign - "$APP" >/dev/null 2>&1
+    codesign --force --options runtime --entitlements "$ENT" --sign "$SIGN" "$APP" >/dev/null 2>&1
     echo "Signiert ohne Sandbox."
 fi
 echo "Fertig: $APP ($(du -sh "$APP" | cut -f1), Version $VERSION)"
