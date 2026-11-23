@@ -19,6 +19,9 @@
   let loading = false;
   const items = new Map(); // id (r-<ref>) → { ref, title, kind, status, project, slug, href, summary }
   const settings = { view: 'list' }; // 'list' | 'board' (Spalten nach Status)
+  const filter = { q: '', project: '', status: '' };
+  let results = null; // null = Basis (Cache) zeigen; Array = Trefferliste (nicht gecacht)
+  let filterTimer = 0;
 
   function node(tag, className, content) {
     const element = document.createElement(tag);
@@ -74,6 +77,83 @@
     Z.save({ v: 1, view: settings.view });
   }
 
+  // ---- Suche und Filter ----------------------------------------------------
+  // Alles über den schon erlaubten Pfad `/api/ingest` mit `q`/`project`/`status`
+  // (serverseitig bestätigt). Ein aktiver Filter zeigt eine Trefferliste und
+  // rührt den lokalen Cache (`items`) nicht an; „zurücksetzen" zeigt wieder die
+  // gecachte Basis.
+  const activeFilter = () => !!(filter.q || filter.project || filter.status);
+  const baseItems = () => [...items.values()];
+  const source = () => (results !== null ? results : baseItems());
+
+  // Nur Unreserviertes + %XX durchlassen, damit die nativ geprüfte Query es
+  // annimmt (encodeURIComponent lässt !'()* stehen).
+  function enc(value) {
+    return encodeURIComponent(value).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  }
+
+  function fillSelect(sel, values, current) {
+    sel.textContent = '';
+    const add = (value, label) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      sel.appendChild(option);
+    };
+    add('', S.ib_all);
+    for (const value of values) add(value, value);
+    sel.value = current && values.includes(current) ? current : '';
+  }
+
+  function populateFilters() {
+    const base = baseItems();
+    fillSelect($('f-project'), [...new Set(base.map((item) => item.project).filter(Boolean))].sort(), filter.project);
+    fillSelect($('f-status'), [...new Set(base.map((item) => item.status).filter(Boolean))].sort(), filter.status);
+  }
+
+  async function applyFilter() {
+    filter.q = $('q').value.trim();
+    filter.project = $('f-project').value;
+    filter.status = $('f-status').value;
+    $('f-clear').hidden = !activeFilter();
+    if (!activeFilter()) {
+      results = null;
+      banner('');
+      render();
+      return;
+    }
+    loading = true;
+    render();
+    const parts = ['kind=feature,ticket,bug'];
+    if (filter.q) parts.push('q=' + enc(filter.q));
+    if (filter.project) parts.push('project=' + enc(filter.project));
+    if (filter.status) parts.push('status=' + enc(filter.status));
+    const answer = await Z.api({ action: 'get', path: '/api/ingest', query: parts.join('&') });
+    loading = false;
+    if (answer.state === 'ok' && answer.status >= 200 && answer.status < 300) {
+      let fresh = [];
+      try {
+        const parsed = JSON.parse(answer.body || '{}');
+        fresh = Array.isArray(parsed) ? parsed : parsed.items || parsed.rows || [];
+      } catch (error) {
+        banner(S.ib_error, { label: S.ib_retry, run: applyFilter });
+        return;
+      }
+      results = fresh.map(cacheClean).filter(Boolean);
+      banner('');
+      render();
+    } else if (answer.state === 'unreachable') {
+      banner(S.ib_unreachable, { label: S.ib_retry, run: applyFilter });
+      render();
+    } else if (answer.status === 401) {
+      banner(S.ib_unauthorized, { label: S.ib_settings, run: openSetup });
+      render();
+    } else {
+      banner(S.ib_error, { label: S.ib_retry, run: applyFilter });
+      render();
+    }
+  }
+
   // Der Umschalter Liste | Board in der Kopfzeile.
   function buildViewToggle() {
     const view = $('view');
@@ -93,14 +173,16 @@
 
   function render() {
     buildViewToggle();
-    const all = [...items.values()];
+    const all = source();
     $('count').textContent = all.length ? text('ib_count', { n: all.length }) : '';
+    $('filters').hidden = !(base && hasToken);
+    $('f-clear').hidden = !activeFilter();
     const empty = !all.length;
     $('empty').hidden = !empty;
     $('list').hidden = empty || settings.view !== 'list';
     $('view-board').hidden = empty || settings.view !== 'board';
     if (empty) {
-      $('empty').textContent = loading ? S.ib_loading : S.ib_empty;
+      $('empty').textContent = activeFilter() ? S.ib_no_results : loading ? S.ib_loading : S.ib_empty;
       return;
     }
     if (settings.view === 'board') renderBoard(all);
@@ -330,6 +412,7 @@
           return;
         }
         await reconcile(fresh);
+        populateFilters();
         banner('');
         render();
       } else if (answer.status === 401) {
@@ -430,6 +513,18 @@
   });
   $('settings-btn').addEventListener('click', openSetup);
   $('refresh').addEventListener('click', loadInbox);
+  $('q').addEventListener('input', () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(applyFilter, 350);
+  });
+  $('f-project').addEventListener('change', applyFilter);
+  $('f-status').addEventListener('change', applyFilter);
+  $('f-clear').addEventListener('click', () => {
+    $('q').value = '';
+    $('f-project').value = '';
+    $('f-status').value = '';
+    applyFilter();
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (!$('preview').hidden) closePreview();
@@ -443,6 +538,11 @@
   $('title').textContent = S.ib_title;
   $('refresh').textContent = S.ib_refresh;
   $('settings-btn').textContent = S.ib_settings;
+  $('q').placeholder = S.ib_search;
+  $('q').setAttribute('aria-label', S.ib_search);
+  $('f-project').setAttribute('aria-label', S.ib_project);
+  $('f-status').setAttribute('aria-label', S.ib_status);
+  $('f-clear').textContent = S.ib_filter_clear;
   $('setup-title').textContent = S.ib_setup_title;
   $('setup-hint').textContent = S.ib_setup_hint;
   $('server-label').textContent = S.ib_server_label;
