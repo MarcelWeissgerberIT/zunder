@@ -337,9 +337,64 @@ pub fn fetch_suggestions(engine: &Engine, query: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Entfernt bekannte reine Tracking-Parameter aus einer Adresse (`utm_…`,
+/// `fbclid`, `gclid` …); alles andere bleibt unangetastet. Liefert die
+/// bereinigte Adresse und wie viele Parameter entfernt wurden. Ohne Abfrage
+/// oder ohne Treffer bleibt die Adresse Zeichen für Zeichen, wie sie war.
+pub fn clean_tracking(url: &str) -> (String, usize) {
+    const EXACT: &[&str] = &[
+        "fbclid", "gclid", "gclsrc", "gbraid", "wbraid", "dclid", "msclkid", "yclid", "twclid",
+        "ttclid", "igshid", "igsh", "mibextid", "mc_eid", "mc_cid", "mkt_tok", "vero_id",
+        "oly_enc_id", "oly_anon_id", "_hsenc", "_hsmi", "wickedid",
+    ];
+    let Ok(mut parsed) = url::Url::parse(url) else {
+        return (url.to_string(), 0);
+    };
+    if parsed.query().is_none() {
+        return (url.to_string(), 0);
+    }
+    let before = parsed.query_pairs().count();
+    let kept: Vec<(String, String)> = parsed
+        .query_pairs()
+        .filter(|(key, _)| {
+            let lower = key.to_ascii_lowercase();
+            !(lower.starts_with("utm_") || EXACT.contains(&lower.as_str()))
+        })
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let removed = before - kept.len();
+    if removed == 0 {
+        return (url.to_string(), 0);
+    }
+    if kept.is_empty() {
+        parsed.set_query(None);
+    } else {
+        let mut pairs = parsed.query_pairs_mut();
+        pairs.clear();
+        for (key, value) in &kept {
+            pairs.append_pair(key, value);
+        }
+    }
+    (parsed.to_string(), removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracking_parameter_werden_entfernt() {
+        let (clean, n) = clean_tracking("https://example.com/p?utm_source=a&utm_medium=b&id=5&fbclid=xyz");
+        assert_eq!(clean, "https://example.com/p?id=5");
+        assert_eq!(n, 3);
+        // Ohne Tracker unverändert (Zeichen für Zeichen).
+        assert_eq!(clean_tracking("https://example.com/p?id=5&q=hi"), ("https://example.com/p?id=5&q=hi".into(), 0));
+        // Nur Tracker → gar keine Abfrage mehr.
+        assert_eq!(clean_tracking("https://example.com/p?utm_source=a&gclid=1"), ("https://example.com/p".into(), 2));
+        // Keine Abfrage bzw. keine Adresse → unverändert.
+        assert_eq!(clean_tracking("https://example.com/p"), ("https://example.com/p".into(), 0));
+        assert_eq!(clean_tracking("kein url"), ("kein url".into(), 0));
+    }
 
     #[test]
     fn urls_are_recognised() {

@@ -599,6 +599,10 @@ const STRINGS: &[(&str, &str, &str)] = &[
     ("app_read_about", "Eine Leseliste, lokal", "A reading list, local"),
     ("m_app_read", "Später lesen", "Read later"),
     ("m_read_later", "Seite später lesen", "Read page later"),
+    ("m_copy_clean_url", "Bereinigte Adresse kopieren", "Copy cleaned address"),
+    ("uc_copied", "Adresse kopiert.", "Address copied."),
+    ("uc_copied_clean", "Adresse kopiert · {n} Tracker entfernt", "Address copied · {n} trackers removed"),
+    ("uc_not_a_page", "Nur Webseiten lassen sich kopieren.", "Only web pages can be copied."),
     // Später-lesen-App und der Befehl, der Seiten hineinlegt
     ("rd_saved", "Zum Später-Lesen gesichert.", "Saved for later."),
     ("rd_failed", "Konnte nicht sichern.", "Could not save."),

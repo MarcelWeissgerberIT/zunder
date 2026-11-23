@@ -140,6 +140,7 @@ pub fn build() -> Menu {
     let _ = bookmarks.append_items(&[
         &item("bookmark_page", "m_bookmark_page", key(CMD, Code::KeyD)),
         &item("read_later", "m_read_later", None),
+        &item("copy_clean_url", "m_copy_clean_url", None),
         &item("bookmarks", "m_show_bookmarks", key(CMD | ALT, Code::KeyB)),
         &item("bookmark_bar", "m_bookmark_bar", key(CMD | SHIFT, Code::KeyB)),
     ]);

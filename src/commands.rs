@@ -604,6 +604,7 @@ impl App {
             "clear_data" => self.show(window, "clearData", true),
             "bookmark_page" => self.toggle_bookmark(window),
             "read_later" => self.read_later(window),
+            "copy_clean_url" => self.copy_clean_url(window),
             "bookmark_bar" => {
                 self.settings.bm_bar = !self.settings.bm_bar;
                 self.store.set_setting("bm_bar", if self.settings.bm_bar { "1" } else { "0" });
@@ -874,6 +875,27 @@ impl App {
             crate::store::RecordPut::Failed => "rd_failed",
         };
         self.notice(window, t(message).to_string(), None, 2200);
+    }
+
+    // Die Adresse der aktuellen Seite ohne Tracking-Parameter in die
+    // Zwischenablage legen (`utm_…`, `fbclid`, `gclid` … fallen weg).
+    fn copy_clean_url(&mut self, window: WindowId) {
+        let Some(tab) = self.windows.get(&window).and_then(|w| w.active_tab()) else {
+            return;
+        };
+        let url = omnibox::bar_url(tab.shown_url());
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            self.notice(window, t("uc_not_a_page").to_string(), None, 2200);
+            return;
+        }
+        let (clean, removed) = omnibox::clean_tracking(&url);
+        native::copy_text(&clean, false);
+        let message = if removed > 0 {
+            t("uc_copied_clean").replace("{n}", &removed.to_string())
+        } else {
+            t("uc_copied").to_string()
+        };
+        self.notice(window, message, None, 2500);
     }
 
     // ----- Suche in der Seite ---------------------------------------------
