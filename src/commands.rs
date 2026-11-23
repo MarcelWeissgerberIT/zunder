@@ -603,6 +603,7 @@ impl App {
             "site_check" => self.show(window, "siteCheck", true),
             "clear_data" => self.show(window, "clearData", true),
             "bookmark_page" => self.toggle_bookmark(window),
+            "read_later" => self.read_later(window),
             "bookmark_bar" => {
                 self.settings.bm_bar = !self.settings.bm_bar;
                 self.store.set_setting("bm_bar", if self.settings.bm_bar { "1" } else { "0" });
@@ -844,6 +845,35 @@ impl App {
         };
         self.notice(window, t(message).to_string(), None, 2200);
         self.bookmarks_changed(None, "");
+    }
+
+    // Die aktuelle Seite in die Leseliste der App „Später lesen" legen – als
+    // Karteikarte in deren Ablage (`app_records`), genau wie die App sie liest.
+    fn read_later(&mut self, window: WindowId) {
+        // Je Aufruf eine andere Kennung, auch bei zwei Seiten in derselben Millisekunde.
+        static READ_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let Some(tab) = self.windows.get(&window).and_then(|w| w.active_tab()) else {
+            return;
+        };
+        let url = omnibox::bar_url(tab.shown_url());
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            self.notice(window, t("rd_not_a_page").to_string(), None, 2200);
+            return;
+        }
+        let title = tab.title.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let seq = READ_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("r-{now:x}{seq:x}");
+        let record = serde_json::json!({ "k": "r", "url": url, "title": title, "when": now, "read": false }).to_string();
+        let message = match self.store.put_app_record("read", &id, &record, 2000) {
+            crate::store::RecordPut::Stored => "rd_saved",
+            crate::store::RecordPut::Full => "rd_full",
+            crate::store::RecordPut::Failed => "rd_failed",
+        };
+        self.notice(window, t(message).to_string(), None, 2200);
     }
 
     // ----- Suche in der Seite ---------------------------------------------

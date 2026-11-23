@@ -66,6 +66,7 @@ pub fn build() -> Menu {
         &item("app_tasks", "m_app_tasks", key(CMD | ALT, Code::KeyK)),
         &item("app_inbox", "m_app_inbox", None),
         &item("app_notes", "m_app_notes", None),
+        &item("app_read", "m_app_read", None),
         &sep(),
         &item("close_tab", "m_close_tab", key(CMD, Code::KeyW)),
         &item("close_window", "m_close_window", key(CMD | SHIFT, Code::KeyW)),
@@ -138,6 +139,7 @@ pub fn build() -> Menu {
     let bookmarks = Submenu::new(t("m_bookmarks"), true);
     let _ = bookmarks.append_items(&[
         &item("bookmark_page", "m_bookmark_page", key(CMD, Code::KeyD)),
+        &item("read_later", "m_read_later", None),
         &item("bookmarks", "m_show_bookmarks", key(CMD | ALT, Code::KeyB)),
         &item("bookmark_bar", "m_bookmark_bar", key(CMD | SHIFT, Code::KeyB)),
     ]);

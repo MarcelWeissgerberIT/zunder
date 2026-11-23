@@ -202,6 +202,25 @@ pub const APPS: &[App] = &[
         requests: false,
         api: false,
     },
+    // Später lesen: eine Leseliste. Seiten kommen über den Befehl „Später lesen“
+    // hinein (commands.rs); die App selbst geht nicht ins Netz (Links öffnen
+    // normale Tabs).
+    App {
+        id: "read",
+        name: "app_read",
+        about: "app_read_about",
+        icon: "bookmark",
+        page: "app-read.html",
+        files: &["apps.css", "apps.js", "app-read.css", "app-read.js"],
+        connect: &[],
+        images: &[],
+        location: false,
+        records: 2000,
+        exports: &[],
+        scans: false,
+        requests: false,
+        api: false,
+    },
 ];
 
 /// So groß ist der Zettel einer App höchstens (Bytes). Mehr passte auch nicht
@@ -712,6 +731,7 @@ mod tests {
             ("app-tasks.js", include_str!("../ui/app-tasks.js")),
             ("app-inbox.js", include_str!("../ui/app-inbox.js")),
             ("app-notes.js", include_str!("../ui/app-notes.js")),
+            ("app-read.js", include_str!("../ui/app-read.js")),
         ];
         for (name, script) in scripts {
             let keys = text_keys(script);
@@ -767,6 +787,10 @@ mod tests {
         let notes = by_id("notes").unwrap();
         assert!(notes.records > 0 && notes.exports == ["md"] && notes.connect.is_empty() && !notes.api && !notes.scans && !notes.requests);
         assert_eq!(url_of("notes"), "zunder://app-notes/");
+        // Später lesen: lokal, Karteikarten, ohne Netz/Abruf/API/Export.
+        let read = by_id("read").unwrap();
+        assert!(read.records > 0 && read.exports.is_empty() && read.connect.is_empty() && !read.api && !read.scans && !read.requests);
+        assert_eq!(url_of("read"), "zunder://app-read/");
         // Dateien sichert nur die Zeiterfassung – als Tabelle, sonst nichts.
         assert!(may_export(time, "zeiten-2026-11.csv") && may_export(time, "ZEITEN.CSV"));
         for name in ["zeiten.html", "zeiten.csv.app", "zeiten.command", "zeiten", "csv"] {
