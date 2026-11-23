@@ -1154,6 +1154,10 @@ const STRINGS: &[(&str, &str, &str)] = &[
     ("sc_cookie_samesite_d", "{list}: wird auch mitgeschickt, wenn eine fremde Seite hierher schickt. Ob untergeschobene Aktionen scheitern, hängt dann allein an der Website.", "{list}: is also sent when another site sends you here. Whether forged actions fail then depends on the website alone."),
     ("sc_ok_cookies", "Sitzungs-Cookies mit Schutzmerkmalen", "Session cookies with protection flags"),
     ("sc_ok_cookies_d", "", ""),
+    // Befehls-Palette
+    ("m_command_palette", "Befehls-Palette …", "Command Palette…"),
+    ("pl_hint", "Befehl oder App suchen …", "Search commands and apps…"),
+    ("pl_none", "Kein Befehl passt.", "Nothing matches."),
     // Tabs durchsuchen
     ("m_tab_search", "Tabs durchsuchen …", "Search Tabs…"),
     ("tip_tab_search", "Alle Tabs (⇧⌘A)", "All tabs (⇧⌘A)"),

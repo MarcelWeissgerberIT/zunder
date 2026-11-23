@@ -94,6 +94,7 @@
     arrowed: false,
     menu: null, // 'main' | 'tab'
     tabSearch: false,
+    palette: false,
     lastPanel: null,
     panel: null,
     panelQuery: '',
@@ -756,6 +757,7 @@
     translate.title = next.translated ? S.tip_translate_undo : S.tip_translate;
 
     if (ui.tabSearch) renderTabSearch();
+    if (ui.palette) renderPalette();
 
     const pct = document.querySelector('#popup .pct');
     if (pct) pct.textContent = nav.zoom + ' %';
@@ -766,7 +768,8 @@
   // ------------------------------------------------------------------------
 
   function syncOverlay() {
-    const need = !$('suggest').hidden || !!ui.menu || !!ui.panel || ui.tabSearch || !!ui.overview || !!ui.splash;
+    const need =
+      !$('suggest').hidden || !!ui.menu || !!ui.panel || ui.tabSearch || ui.palette || !!ui.overview || !!ui.splash;
     document.body.classList.toggle('sheet', !!ui.panel);
     if (need === ui.overlay) return;
     ui.overlay = need;
@@ -777,6 +780,7 @@
   function closeEverything() {
     closeMenu();
     closeTabSearch();
+    closePalette();
     closeOverview();
     closePanel();
     stopEditing();
@@ -833,6 +837,7 @@
     add('new_window', S.m_new_window, 'window', '⌘N');
     add('new_private', S.m_new_private, 'private', '⇧⌘N');
     add('new_stealth', S.m_new_stealth, 'stealth', '⌥⌘N');
+    box.appendChild(menuItem(S.m_command_palette, 'search', '⌘K', openPalette));
     box.appendChild(menuItem(S.m_tab_search, 'tabs', '⇧⌘A', openTabSearch));
     box.appendChild(menuItem(S.m_tab_overview, 'grid', '⇧⌘\\', openOverview));
     sep();
@@ -2341,6 +2346,133 @@
   });
 
   // ------------------------------------------------------------------------
+  // Befehls-Palette (⌘K)
+  // ------------------------------------------------------------------------
+
+  const plInput = $('pl-input');
+  let plItems = [];
+  let plSelected = 0;
+
+  // Kuratierte Aktionen; Labels/Icons/Kürzel wie im Hauptmenü. Alles läuft über
+  // command(id) – derselbe Weg wie die Menüeinträge, kein eigener Befehlspfad.
+  function paletteCommands() {
+    const translated = state && state.translated;
+    const rows = [
+      ['new_tab', S.m_new_tab, 'plus', '⌘T'],
+      ['new_window', S.m_new_window, 'window', '⌘N'],
+      ['new_private', S.m_new_private, 'private', '⇧⌘N'],
+      ['new_stealth', S.m_new_stealth, 'stealth', '⌥⌘N'],
+      ['reopen_tab', S.m_reopen_tab, 'tabs', '⇧⌘T'],
+      ['duplicate_tab', S.m_duplicate_tab, 'copy', ''],
+      ['tab_search', S.m_tab_search, 'tabs', '⇧⌘A'],
+      ['tab_overview', S.m_tab_overview, 'grid', '⇧⌘\\'],
+      ['reader', S.m_reader, 'reader', '⌥⌘R'],
+      ['translate_page', translated ? S.m_translate_undo : S.m_translate, 'translate', '⌥⌘T'],
+      ['bookmark_page', S.m_bookmark_page, 'star', '⌘D'],
+      ['read_later', S.m_read_later, 'bookmark', ''],
+      ['copy_clean_url', S.m_copy_clean_url, 'copy', ''],
+      ['find', S.m_find, 'search', '⌘F'],
+      ['print', S.m_print, 'print', '⌘P'],
+      ['mobile_view', S.m_mobile_view, 'phone', '⇧⌘M'],
+      ['assistant', S.m_assistant, 'sparkle', '⌘J'],
+      ['assistant_summary', S.m_assistant_summary, 'list', '⇧⌘J'],
+      ['site_check', S.m_site_check, 'lock', '⌥⌘S'],
+      ['history', S.p_history, 'history', '⌘Y'],
+      ['bookmarks', S.p_bookmarks, 'bookmark', '⌥⌘B'],
+      ['downloads', S.p_downloads, 'download', '⌥⌘L'],
+      ['passwords', S.p_passwords, 'key', ''],
+      ['settings', S.p_settings, 'settings', '⌘,'],
+      ['app_weather', S.m_app_weather, 'weather', ''],
+      ['app_time', S.m_app_time, 'timer', '⌥⌘Z'],
+      ['app_security', S.m_app_security, 'shield', ''],
+      ['app_request', S.m_app_request, 'send', ''],
+      ['app_tasks', S.m_app_tasks, 'board', '⌥⌘K'],
+      ['app_inbox', S.m_app_inbox, 'list', ''],
+      ['app_notes', S.m_app_notes, 'edit', ''],
+      ['app_read', S.m_app_read, 'bookmark', ''],
+    ];
+    return rows.map(([id, label, ic, hint]) => ({ id, label: label || id, icon: ic, hint }));
+  }
+
+  function openPalette() {
+    closeMenu();
+    closePanel();
+    closeTabSearch();
+    ui.palette = true;
+    plSelected = 0;
+    plInput.value = '';
+    $('palette').hidden = false;
+    renderPalette();
+    syncOverlay();
+    post({ c: 'focusChrome' });
+    setTimeout(() => plInput.focus(), 0);
+  }
+
+  function closePalette() {
+    if (!ui.palette) return;
+    ui.palette = false;
+    $('palette').hidden = true;
+    syncOverlay();
+  }
+
+  function runPaletteItem(item) {
+    closePalette();
+    command(item.id);
+    post({ c: 'focusContent' });
+  }
+
+  function renderPalette() {
+    const needle = plInput.value.trim().toLowerCase();
+    const terms = needle ? needle.split(/\s+/) : [];
+    plItems = paletteCommands().filter((cmd) => {
+      if (!terms.length) return true;
+      const hay = cmd.label.toLowerCase();
+      return terms.every((term) => hay.includes(term));
+    });
+    plSelected = Math.max(0, Math.min(plSelected, plItems.length - 1));
+    const list = $('pl-list');
+    list.textContent = '';
+    if (!plItems.length) {
+      list.appendChild(el('div', 'empty', S.pl_none));
+      return;
+    }
+    plItems.forEach((cmd, index) => {
+      const row = el('div', 'row' + (index === plSelected ? ' sel' : ''));
+      row.appendChild(icon(cmd.icon || 'globe'));
+      const text = el('div', 'txt');
+      text.appendChild(el('div', 't', cmd.label));
+      row.appendChild(text);
+      if (cmd.hint) row.appendChild(el('div', 'plkey', cmd.hint));
+      row.addEventListener('click', () => runPaletteItem(cmd));
+      list.appendChild(row);
+    });
+    const selected = list.children[plSelected];
+    if (selected && selected.scrollIntoView) selected.scrollIntoView({ block: 'nearest' });
+  }
+
+  plInput.placeholder = S.pl_hint;
+  plInput.addEventListener('input', () => {
+    plSelected = 0;
+    renderPalette();
+  });
+  plInput.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!plItems.length) return;
+      plSelected = (plSelected + (event.key === 'ArrowDown' ? 1 : -1) + plItems.length) % plItems.length;
+      renderPalette();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (plItems[plSelected]) runPaletteItem(plItems[plSelected]);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closePalette();
+      post({ c: 'focusContent' });
+    }
+  });
+
+  // ------------------------------------------------------------------------
   // Suche in der Seite
   // ------------------------------------------------------------------------
 
@@ -2615,6 +2747,7 @@
     else if (what === 'siteCheck') ui.menu === 'check' ? closeMenu() : openCheck();
     else if (what === 'tab_search') ui.tabSearch ? closeTabSearch() : openTabSearch();
     else if (what === 'tab_overview') ui.overview ? closeOverview() : openOverview();
+    else if (what === 'palette') ui.palette ? closePalette() : openPalette();
     else if (PANEL_TITLE[what]) togglePanel(what);
   }
 
@@ -2725,7 +2858,7 @@
   document.body.classList.toggle('stealth', !!DATA.stealth);
 
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && (ui.menu || ui.panel || ui.tabSearch || ui.overview) && !addressFocused()) {
+    if (event.key === 'Escape' && (ui.menu || ui.panel || ui.tabSearch || ui.palette || ui.overview) && !addressFocused()) {
       closeEverything();
       post({ c: 'focusContent' });
     }

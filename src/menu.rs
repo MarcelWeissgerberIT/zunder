@@ -152,6 +152,7 @@ pub fn build() -> Menu {
         &sep(),
         &item("next_tab", "m_next_tab", key(CTRL, Code::Tab)),
         &item("prev_tab", "m_prev_tab", key(CTRL | SHIFT, Code::Tab)),
+        &item("command_palette", "m_command_palette", key(CMD, Code::KeyK)),
         &item("tab_search", "m_tab_search", key(CMD | SHIFT, Code::KeyA)),
         &item("tab_overview", "m_tab_overview", key(CMD | SHIFT, Code::Backslash)),
         &item("duplicate_tab", "m_duplicate_tab", None),

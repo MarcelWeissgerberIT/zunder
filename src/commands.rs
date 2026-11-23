@@ -597,6 +597,7 @@ impl App {
             "history" | "bookmarks" | "downloads" | "settings" | "passwords" | "tab_search" | "tab_overview" => {
                 self.show(window, id, true)
             }
+            "command_palette" => self.show(window, "palette", true),
             "fill_login" => self.fill_command(window),
             "reader" => self.toggle_reader(window),
             "translate_page" => self.translate_page(window),

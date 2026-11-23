@@ -2155,6 +2155,98 @@ body.sheet #scrim {
   padding: 22px 20px;
 }
 
+/* ---- Befehls-Palette ---------------------------------------------------- */
+
+#palette {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 20px));
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--pop);
+  box-shadow: var(--pop-shadow);
+}
+
+#pl-field {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  margin: 2px 2px 6px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+
+#pl-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+  background: var(--field-focus);
+}
+
+#pl-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+#pl-input::selection {
+  background: var(--ring);
+}
+
+#pl-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#pl-list .row {
+  cursor: default;
+}
+
+#pl-list .row .txt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#pl-list .row .ic {
+  color: var(--muted);
+}
+
+#pl-list .row.sel {
+  background: var(--ring);
+}
+
+#pl-list .row.sel .ic {
+  color: var(--text);
+}
+
+#pl-list .plkey {
+  flex: none;
+  margin-left: auto;
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+#pl-list .empty {
+  padding: 22px 20px;
+  color: var(--muted);
+}
+
 /* ---- Passwörter --------------------------------------------------------- */
 
 .setbtns.top {
