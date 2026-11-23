@@ -157,15 +157,17 @@
   }
 
   function itemEl(item) {
-    const href = linkFor(item);
-    const element = document.createElement(href ? 'a' : 'div');
-    element.className = 'item';
-    if (href) {
-      element.href = href;
-      element.target = '_blank';
-      element.rel = 'noopener';
-      element.title = S.ib_open_hint;
-    }
+    const element = node('div', 'item');
+    element.setAttribute('role', 'button');
+    element.tabIndex = 0;
+    element.title = S.ib_open_hint;
+    element.addEventListener('click', () => openPreview(item));
+    element.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openPreview(item);
+      }
+    });
 
     const body = node('div', 'body');
     const head = node('div', 'head');
@@ -181,9 +183,80 @@
 
     element.appendChild(body);
     const go = node('span', 'go');
-    go.appendChild(icon('external'));
+    go.appendChild(icon('eye'));
     element.appendChild(go);
     return element;
+  }
+
+  // ------------------------------------------------------------------------
+  // Schnellvorschau eines Vorgangs (read-only). Klick auf eine Karte holt den
+  // Record (`GET /api/ingest?ref=…`) und zeigt ihn hier – ohne in die Web-App zu
+  // wechseln; „Im Tab öffnen" führt bei Bedarf dorthin.
+  // ------------------------------------------------------------------------
+
+  function fillMeta(box, rec) {
+    box.textContent = '';
+    if (rec.kind) box.appendChild(node('span', 'chip kind', rec.kind));
+    if (rec.status) box.appendChild(node('span', 'chip', rec.status));
+    if (rec.project) box.appendChild(node('span', 'chip', rec.project));
+    if (rec.displayRef || rec.ref) box.appendChild(node('span', 'chip', '#' + (rec.displayRef || rec.ref)));
+    if (typeof rec.assignee === 'string' && rec.assignee) box.appendChild(node('span', 'chip', S.ib_assignee + ': ' + rec.assignee));
+    if (typeof rec.due === 'string' && rec.due) box.appendChild(node('span', 'chip', S.ib_due + ': ' + rec.due));
+  }
+
+  function showTags(tags) {
+    const box = $('pv-tags');
+    box.textContent = '';
+    if (Array.isArray(tags)) for (const tag of tags.slice(0, 24)) box.appendChild(node('span', 'chip', '#' + tag));
+    box.hidden = !box.children.length;
+  }
+
+  function previewLink(ref, href) {
+    return linkFor({ ref, href });
+  }
+
+  async function openPreview(item) {
+    $('pv-title').textContent = item.title || '–';
+    fillMeta($('pv-meta'), item);
+    showTags(null);
+    $('pv-body').textContent = S.ib_loading;
+    const href = previewLink(item.ref, item.href);
+    $('pv-open').hidden = !href;
+    if (href) $('pv-open').href = href;
+    $('preview').hidden = false;
+    setTimeout(() => $('pv-close').focus(), 0);
+    if (!item.ref) {
+      $('pv-body').textContent = S.ib_preview_error;
+      return;
+    }
+    const answer = await Z.api({ action: 'get', path: '/api/ingest', query: 'ref=' + encodeURIComponent(item.ref) });
+    if ($('preview').hidden) return; // inzwischen geschlossen
+    let rec = null;
+    if (answer.state === 'ok' && answer.status >= 200 && answer.status < 300) {
+      try {
+        const parsed = JSON.parse(answer.body || '{}');
+        rec = parsed.item || parsed.record || (parsed.items && parsed.items[0]) || parsed;
+      } catch (error) {
+        rec = null;
+      }
+    }
+    if (rec && typeof rec === 'object') {
+      $('pv-title').textContent = rec.title || item.title || '–';
+      fillMeta($('pv-meta'), Object.assign({}, item, rec));
+      showTags(rec.tags);
+      const lead = typeof rec.summary === 'string' && rec.summary ? rec.summary + '\n\n' : '';
+      const body = typeof rec.body === 'string' ? rec.body : '';
+      $('pv-body').textContent = (lead + body).trim() || S.ib_no_body;
+      const freshHref = previewLink(rec.ref || item.ref, rec.href || item.href);
+      $('pv-open').hidden = !freshHref;
+      if (freshHref) $('pv-open').href = freshHref;
+    } else {
+      $('pv-body').textContent = S.ib_preview_error;
+    }
+  }
+
+  function closePreview() {
+    $('preview').hidden = true;
   }
 
   // ------------------------------------------------------------------------
@@ -351,10 +424,16 @@
   $('setup').addEventListener('click', (event) => {
     if (event.target === $('setup')) closeSetup();
   });
+  $('pv-close').addEventListener('click', closePreview);
+  $('preview').addEventListener('click', (event) => {
+    if (event.target === $('preview')) closePreview();
+  });
   $('settings-btn').addEventListener('click', openSetup);
   $('refresh').addEventListener('click', loadInbox);
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !$('setup').hidden) closeSetup();
+    if (event.key !== 'Escape') return;
+    if (!$('preview').hidden) closePreview();
+    else if (!$('setup').hidden) closeSetup();
   });
 
   // ------------------------------------------------------------------------
@@ -371,6 +450,8 @@
   $('token-label').textContent = S.ib_token_label;
   $('token-hint').textContent = S.ib_token_hint;
   $('save').textContent = S.ib_save;
+  $('pv-open').textContent = S.ib_open_tab;
+  $('pv-close').title = S.ib_close;
   $('cancel').textContent = S.ib_cancel;
   $('signout').textContent = S.ib_signout;
   document.title = S.app_inbox || S.ib_title;

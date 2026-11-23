@@ -56,6 +56,23 @@
   </form>
 </section>
 
+<!-- Schnellvorschau eines Vorgangs (read-only) -->
+<section id="preview" class="sheet" hidden>
+  <div class="sheet-box preview-box">
+    <header>
+      <h2 id="pv-title"></h2>
+      <button id="pv-close" type="button" class="round" aria-label="x"><svg><use href="#i-close"/></svg></button>
+    </header>
+    <div id="pv-meta" class="meta"></div>
+    <div id="pv-tags" class="meta"></div>
+    <div id="pv-body" class="pv-body"></div>
+    <div class="actions">
+      <span class="spacer"></span>
+      <a id="pv-open" class="primary" target="_blank" rel="noopener" hidden></a>
+    </div>
+  </div>
+</section>
+
 <div id="toast" hidden><span id="toast-text"></span></div>
 
 <!--DATA-->

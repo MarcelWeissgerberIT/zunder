@@ -427,6 +427,42 @@ main {
   flex: 1;
 }
 
+/* ---- Schnellvorschau -------------------------------------------------------- */
+
+.preview-box {
+  max-width: 620px;
+  max-height: min(78vh, 720px);
+}
+
+.preview-box header h2 {
+  font-size: 16px;
+  line-height: 1.3;
+  padding-right: 8px;
+}
+
+#pv-tags {
+  margin-top: -2px;
+}
+
+.pv-body {
+  margin-top: 4px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--field);
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+  max-height: 46vh;
+  color: var(--text);
+}
+
+a.primary {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 /* ---- Meldung ---------------------------------------------------------------- */
 
 #toast {
