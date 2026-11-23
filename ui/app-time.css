@@ -1,0 +1,882 @@
+/* Zeiterfassung. */
+
+:root {
+  --bg: #f6f4f1;
+  --text: #1e1d1b;
+  --muted: #736e68;
+  --faint: #a39d96;
+  --card: #ffffff;
+  --line: rgba(0, 0, 0, 0.09);
+  --hover: rgba(0, 0, 0, 0.05);
+  --accent: #e8590c;
+  --accent-text: #ffffff;
+  --field: rgba(0, 0, 0, 0.045);
+  --good: #2f9e44;
+  --warn: #d9480f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #191817;
+    --text: #f2efeb;
+    --muted: #a39d96;
+    --faint: #6f6a64;
+    --card: #252322;
+    --line: rgba(255, 255, 255, 0.1);
+    --hover: rgba(255, 255, 255, 0.07);
+    --accent: #ff8a3d;
+    --accent-text: #1b1a19;
+    --field: rgba(255, 255, 255, 0.07);
+    --good: #69db7c;
+    --warn: #ffa94d;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+#bar,
+main {
+  width: min(820px, calc(100% - 32px));
+  margin: 0 auto;
+}
+
+/* ---- Kopfzeile -------------------------------------------------------------- */
+
+#bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 0 12px;
+  position: relative;
+}
+
+.round {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.round:hover,
+.pill:hover,
+.ghost:hover {
+  background: var(--hover);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-weight: 600;
+}
+
+.ghost {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Der Kalender klappt unter dem Knopf mit dem Datum auf. */
+#calendar {
+  position: absolute;
+  top: calc(100% - 6px);
+  z-index: 4;
+  width: 268px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--line);
+}
+
+.cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.cal-head .round {
+  width: 30px;
+  height: 30px;
+  background: none;
+  box-shadow: none;
+}
+
+.cal-head .round:hover {
+  background: var(--hover);
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  justify-items: center;
+}
+
+.cal-name {
+  height: 22px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 22px;
+}
+
+.cal-day {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-day:hover {
+  background: var(--hover);
+}
+
+.cal-day.today {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.cal-day.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+/* Ein Punkt: An diesem Tag ist gebucht. */
+.cal-day.booked::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.cal-day.on.booked::after {
+  background: var(--accent-text);
+}
+
+#week-sum {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.banner {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--field);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ---- Karten ----------------------------------------------------------------- */
+
+.card {
+  margin: 0 0 14px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line), 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.card h2 {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.primary {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.primary:hover {
+  filter: brightness(1.06);
+}
+
+.primary:disabled {
+  opacity: 0.45;
+  filter: none;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 9px 2px 7px;
+  border-radius: 999px;
+  background: var(--field);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot, var(--faint));
+}
+
+/* ---- Schnellbuchung --------------------------------------------------------- */
+
+#quick-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px 0 14px;
+  border-radius: 14px;
+  background: var(--field);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+#quick-row:focus-within {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+#quick-row > svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--muted);
+}
+
+#quick-input {
+  flex: 1;
+  min-width: 0;
+  height: 48px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+#quick-input::placeholder {
+  color: var(--faint);
+}
+
+#quick-preview {
+  min-height: 22px;
+  margin: 8px 4px 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+#quick-preview b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+#quick-preview.bad {
+  color: var(--warn);
+}
+
+#quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px 0 9px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 13px;
+}
+
+.chip::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot, var(--faint));
+}
+
+.chip.plain::before {
+  display: none;
+}
+
+.chip.plain {
+  padding: 0 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chip:hover {
+  background: var(--hover);
+}
+
+.chip.on {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* ---- Laufende Uhr ----------------------------------------------------------- */
+
+#running {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+#running-clock {
+  font-size: 30px;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* „Pause“ und „Weiter“: als Knopf zu erkennen, ohne dem Stoppen den Rang zu nehmen. */
+#running-pause {
+  height: 36px;
+  padding: 0 16px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: inherit;
+  font-weight: 600;
+}
+
+#running-pause:hover {
+  background: var(--hover);
+}
+
+/* Pausiert: Die Uhr steht – und sieht auch so aus. */
+#running.paused {
+  box-shadow: inset 0 0 0 2px var(--line);
+}
+
+#running.paused #running-clock {
+  color: var(--muted);
+}
+
+#running-what {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+#running-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#running-since {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* ---- Der Tag ---------------------------------------------------------------- */
+
+#day-head,
+#week-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#day-sum,
+#week-balance {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+#day-sum small,
+#week-balance small {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+#day-meter {
+  height: 5px;
+  margin: 10px 0 6px;
+  border-radius: 3px;
+  background: var(--field);
+  overflow: hidden;
+}
+
+#day-meter i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+#day-meter.done i {
+  background: var(--good);
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: 112px 56px minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 6px;
+  border-radius: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry + .entry,
+.gap + .entry,
+.entry + .gap {
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+.entry:hover {
+  background: var(--hover);
+}
+
+.entry .tag {
+  justify-self: start;
+  max-width: 100%;
+}
+
+.entry .span {
+  color: var(--muted);
+}
+
+.entry .length {
+  font-weight: 600;
+}
+
+.entry .text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Kleine Marke vor der Notiz: „Pause 0:30“, „läuft weiter“. */
+.entry .mark {
+  margin-right: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--field);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Diesen Eintrag führt die Uhr gerade weiter. */
+.entry.live {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.entry.live .mark:first-child {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--accent);
+}
+
+/* Die Frage unter einem Eintrag: weiterführen oder neu beginnen? */
+.choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 4px 6px 14px 12px;
+}
+
+.choice small {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.choice .primary,
+.choice .ghost {
+  height: 32px;
+}
+
+.entry .tools {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+}
+
+.entry:hover .tools,
+.entry:focus-within .tools {
+  opacity: 1;
+}
+
+.tool {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--muted);
+}
+
+.tool:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.entry.clash .span {
+  color: var(--warn);
+}
+
+.gap {
+  padding: 4px 6px 4px 12px;
+  color: var(--faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+#empty {
+  padding: 18px 6px 8px;
+  color: var(--muted);
+}
+
+/* Bearbeiten eines Eintrags */
+
+.editor {
+  display: grid;
+  grid-template-columns: 96px 96px minmax(0, 150px) minmax(0, 1fr);
+  gap: 8px;
+  padding: 10px 6px 12px;
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+.editor input,
+.editor select,
+#settings input,
+#settings select {
+  height: 34px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--field);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text);
+  font: inherit;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Die Pausen des Eintrags, über die ganze Breite. */
+.editor .pauses {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor .pauses .struck {
+  text-decoration: line-through;
+}
+
+.editor .actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.editor .actions .primary {
+  height: 32px;
+}
+
+/* ---- Die Woche -------------------------------------------------------------- */
+
+#week-bars {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.weekday {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 6px 4px;
+  border-radius: 10px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.weekday:hover {
+  background: var(--hover);
+}
+
+.weekday.on {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.weekday .column {
+  position: relative;
+  height: 84px;
+  border-radius: 6px;
+  background: var(--field);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column-reverse;
+}
+
+.weekday .column i {
+  display: block;
+  width: 100%;
+  background: var(--dot, var(--faint));
+}
+
+.weekday .column .goal {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1.5px dashed var(--faint);
+}
+
+.weekday b {
+  font-weight: 600;
+}
+
+.weekday span {
+  color: var(--muted);
+}
+
+#week-projects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 14px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+#week-projects div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#week-projects div::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot, var(--faint));
+}
+
+#week-projects b {
+  font-weight: 600;
+}
+
+/* ---- Einstellungen ---------------------------------------------------------- */
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: start center;
+  padding: 60px 16px 24px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow-y: auto;
+}
+
+.sheet-box {
+  width: min(560px, 100%);
+  padding: 18px 20px 20px;
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+}
+
+.sheet-box header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sheet-box h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sheet-box h3 {
+  margin: 18px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#set-targets {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+#set-targets label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+#set-targets input {
+  width: 100%;
+  padding: 0 4px;
+  text-align: center;
+}
+
+.segmented {
+  display: inline-flex;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+
+.segmented button {
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.segmented button.on {
+  background: var(--field);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.project-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.project-row input[type="color"] {
+  width: 30px;
+  height: 30px;
+  padding: 2px;
+  border-radius: 50%;
+}
+
+.project-row.gone input[type="text"] {
+  color: var(--faint);
+  text-decoration: line-through;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+/* ---- Meldung mit „Rückgängig“ ------------------------------------------------ */
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px 10px 16px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+  font-size: 13.5px;
+}
+
+#toast button {
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@media (max-width: 620px) {
+  .entry {
+    grid-template-columns: 96px 48px minmax(0, 1fr) auto;
+  }
+
+  .entry .text {
+    display: none;
+  }
+
+  .editor {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  #running {
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #day-meter i {
+    transition: none;
+  }
+}

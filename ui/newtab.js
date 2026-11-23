@@ -8,6 +8,39 @@
 
   document.title = S.new_tab_title;
 
+  // Eingebaute Apps: Kacheln, die zu ihren Seiten führen. Öffnen kann eine App
+  // außer dem Browser nur diese Seite hier – über genau diese Adressen.
+  function showApps() {
+    const section = $('apps');
+    const box = section.querySelector('.tiles');
+    for (const app of DATA.apps || []) {
+      if (!/^zunder:\/\/app-[a-z]+\/$/.test(app.url)) continue;
+      const link = document.createElement('a');
+      link.className = 'tile app';
+      link.href = app.url;
+      link.title = app.about || app.name;
+      const picture = document.createElement('span');
+      picture.className = 'icon';
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+      use.setAttribute('href', '#i-' + String(app.icon).replace(/[^a-z0-9-]/g, ''));
+      svg.appendChild(use);
+      picture.appendChild(svg);
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = app.name;
+      const where = document.createElement('span');
+      where.className = 'where';
+      where.textContent = app.about || '';
+      link.append(picture, label, where);
+      box.appendChild(link);
+    }
+    if (box.children.length) {
+      section.querySelector('h2').textContent = S.nt_apps;
+      section.hidden = false;
+    }
+  }
+
   // Stealth-Fenster: sagt offen, was es leistet – und was nicht.
   if (DATA.stealth) {
     document.body.classList.add('private', 'stealth');
@@ -58,6 +91,7 @@
     $('private').querySelector('h1').textContent = S.nt_private_title;
     $('private').querySelector('p').textContent = S.nt_private_text;
     $('hint').textContent = S.nt_hint;
+    showApps();
     return;
   }
 
@@ -132,6 +166,7 @@
   }
 
   const data = DATA.data || {};
+  showApps();
 
   // ------------------------------------------------------------------------
   // Schreibtisch: Lesezeichen als Kacheln, die sich durch Ziehen anordnen und

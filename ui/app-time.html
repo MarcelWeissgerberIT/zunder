@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title></title>
+<link rel="stylesheet" href="apps.css">
+<link rel="stylesheet" href="app-time.css">
+</head>
+<body>
+<!--ICONS-->
+<header id="bar">
+  <button id="prev" type="button" class="round"><svg><use href="#i-back"/></svg></button>
+  <button id="date" type="button" class="pill" aria-haspopup="true" aria-expanded="false"><svg><use href="#i-calendar"/></svg><span id="date-label"></span></button>
+  <button id="next" type="button" class="round"><svg><use href="#i-forward"/></svg></button>
+  <button id="today" type="button" class="ghost" hidden></button>
+  <div id="calendar" hidden></div>
+  <span id="week-sum"></span>
+  <button id="settings-button" type="button" class="round"><svg><use href="#i-settings"/></svg></button>
+</header>
+
+<main>
+  <p id="private-note" class="banner" hidden></p>
+  <p id="trouble" class="banner" hidden><span id="trouble-text"></span> <button id="trouble-retry" type="button" class="ghost"></button></p>
+
+  <section id="quick" class="card">
+    <div id="quick-row">
+      <svg><use href="#i-timer"/></svg>
+      <input id="quick-input" type="text" autocomplete="off" spellcheck="false">
+      <button id="quick-book" type="button" class="primary"></button>
+    </div>
+    <p id="quick-preview"></p>
+    <div id="quick-chips"></div>
+  </section>
+
+  <section id="running" class="card" hidden>
+    <div id="running-clock"></div>
+    <div id="running-what">
+      <span id="running-project" class="tag"></span>
+      <span id="running-note"></span>
+      <small id="running-since"></small>
+    </div>
+    <button id="running-pause" type="button" class="ghost"></button>
+    <button id="running-stop" type="button" class="primary"></button>
+    <button id="running-drop" type="button" class="ghost"></button>
+  </section>
+
+  <section id="day" class="card">
+    <div id="day-head">
+      <h2 id="day-title"></h2>
+      <span id="day-sum"></span>
+    </div>
+    <div id="day-meter"><i></i></div>
+    <div id="entries"></div>
+    <p id="empty" hidden></p>
+  </section>
+
+  <section id="week" class="card">
+    <div id="week-head">
+      <h2></h2>
+      <span id="week-balance"></span>
+    </div>
+    <div id="week-bars"></div>
+    <div id="week-projects"></div>
+  </section>
+</main>
+
+<section id="settings" class="sheet" hidden>
+  <div class="sheet-box">
+    <header>
+      <h2></h2>
+      <button id="settings-close" type="button" class="round"><svg><use href="#i-close"/></svg></button>
+    </header>
+    <h3 id="set-target-title"></h3>
+    <div id="set-targets"></div>
+    <h3 id="set-round-title"></h3>
+    <div id="set-round" class="segmented"></div>
+    <h3 id="set-projects-title"></h3>
+    <div id="set-projects"></div>
+    <h3 id="set-export-title"></h3>
+    <p id="set-export-text" class="note"></p>
+    <div class="buttons">
+      <button id="export-month" type="button" class="primary"></button>
+      <button id="export-all" type="button" class="ghost"></button>
+    </div>
+    <p id="set-where" class="note"></p>
+  </div>
+</section>
+
+<div id="toast" hidden>
+  <span id="toast-text"></span>
+  <button id="toast-undo" type="button"></button>
+</div>
+
+<!--DATA-->
+<script src="apps.js"></script>
+<script src="app-time.js"></script>
+</body>
+</html>

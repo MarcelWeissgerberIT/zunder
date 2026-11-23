@@ -11,10 +11,12 @@
     <key>com.apple.security.files.user-selected.read-write</key><true/>
     <key>com.apple.security.print</key><true/>
     <!-- Kamera und Mikrofon: Voraussetzung dafür, dass WebKit je Seite
-         nachfragen kann. Von selbst bekommt keine Seite etwas. Den Standort
-         bietet Zunder Seiten nicht an – also verlangt es ihn auch nicht. -->
+         nachfragen kann. Von selbst bekommt keine Seite etwas. -->
     <key>com.apple.security.device.camera</key><true/>
     <key>com.apple.security.device.audio-input</key><true/>
+    <!-- Standort: nur für eingebaute Apps (Wetter) und erst nach Zustimmung je
+         App. Webseiten bietet Zunder den Standort nicht an. -->
+    <key>com.apple.security.personal-information.location</key><true/>
     <!-- Nur lesen, und nur genau das: das Profil aus der Zeit vor der Sandbox
          (einmal herüberholen) und die Lesezeichen-Dateien anderer Browser
          („Aus Chrome übernehmen“) – nicht deren Cookies oder Passwörter. -->

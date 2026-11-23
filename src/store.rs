@@ -169,7 +169,13 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS bookmark_folders (
                  name TEXT PRIMARY KEY,
                  position INTEGER NOT NULL DEFAULT 0
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS app_records (
+                 app TEXT NOT NULL,
+                 id TEXT NOT NULL,
+                 data TEXT NOT NULL,
+                 PRIMARY KEY (app, id)
+             ) WITHOUT ROWID;",
         )?;
         // Downloads, die beim letzten Beenden noch liefen, sind abgebrochen.
         db.execute(
@@ -705,11 +711,98 @@ impl Store {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) {
-        let _ = self.db.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, value],
+        let _ = self.try_set_setting(key, value);
+    }
+
+    /// Wie `setting`, sagt aber, wenn sich die Datenbank nicht lesen ließ – für
+    /// Daten, bei denen „nichts da“ und „nicht lesbar“ nicht dasselbe sind
+    /// (der Zettel einer App: Auf einen leeren schriebe sie einen neuen).
+    pub fn try_setting(&self, key: &str) -> Result<Option<String>, ()> {
+        self.db
+            .query_row("SELECT value FROM settings WHERE key = ?1", params![key], |row| row.get(0))
+            .optional()
+            .map_err(|_| ())
+    }
+
+    /// Wie `set_setting`, sagt aber, ob es gelungen ist.
+    pub fn try_set_setting(&self, key: &str, value: &str) -> bool {
+        self.db
+            .execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .is_ok()
+    }
+
+    // ----- Karteikarten der eingebauten Apps ---------------------------------
+    //
+    // Was eine eingebaute App aufbewahrt, das mehr ist als ein Zettel: viele
+    // kleine Einträge, jeder unter seiner Kennung (`apps.rs`). Sie gehören zum
+    // Browser wie die Lesezeichen – „Verlauf und Website-Daten löschen“ lässt
+    // sie stehen.
+
+    pub fn app_record_count(&self, app: &str) -> usize {
+        self.db
+            .query_row("SELECT count(*) FROM app_records WHERE app = ?1", params![app], |row| row.get::<_, i64>(0))
+            .map_or(0, |count| usize::try_from(count).unwrap_or(0))
+    }
+
+    /// Legt eine Karte ab oder ersetzt sie. `limit`: So viele Karten darf die
+    /// App haben – eine neue darüber hinaus wird nicht angelegt.
+    pub fn put_app_record(&self, app: &str, id: &str, data: &str, limit: usize) -> RecordPut {
+        let known = self
+            .db
+            .prepare_cached("SELECT 1 FROM app_records WHERE app = ?1 AND id = ?2")
+            .and_then(|mut statement| statement.exists(params![app, id]));
+        let Ok(known) = known else {
+            return RecordPut::Failed;
+        };
+        if !known && self.app_record_count(app) >= limit {
+            return RecordPut::Full;
+        }
+        let stored = self.db.execute(
+            "INSERT INTO app_records (app, id, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT(app, id) DO UPDATE SET data = excluded.data",
+            params![app, id, data],
         );
+        if stored.is_ok() {
+            RecordPut::Stored
+        } else {
+            RecordPut::Failed
+        }
+    }
+
+    /// Wirft eine Karte weg. Dass es sie gar nicht gab, ist kein Fehler.
+    pub fn remove_app_record(&self, app: &str, id: &str) -> bool {
+        self.db.execute("DELETE FROM app_records WHERE app = ?1 AND id = ?2", params![app, id]).is_ok()
+    }
+
+    /// Die Karten einer App, nach Kennung geordnet, ab der nach `after`:
+    /// höchstens `limit` Stück und zusammen höchstens `budget` Bytes (eine aber
+    /// immer). Dazu, ob danach noch welche kommen. `None`: Die Datenbank ließ
+    /// sich nicht lesen – das ist etwas anderes als „keine Karten“.
+    pub fn app_records(&self, app: &str, after: &str, limit: usize, budget: usize) -> Option<(Vec<(String, String)>, bool)> {
+        let mut statement = self
+            .db
+            .prepare_cached("SELECT id, data FROM app_records WHERE app = ?1 AND id > ?2 ORDER BY id LIMIT ?3")
+            .ok()?;
+        let wanted = i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX);
+        let rows = statement
+            .query_map(params![app, after, wanted], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .ok()?;
+        let mut list: Vec<(String, String)> = Vec::new();
+        let mut used = 0usize;
+        for row in rows {
+            let (id, data) = row.ok()?;
+            let size = id.len() + data.len();
+            if list.len() >= limit || (!list.is_empty() && used + size > budget) {
+                return Some((list, true));
+            }
+            used += size;
+            list.push((id, data));
+        }
+        Some((list, false))
     }
 
     // ----- Anmeldungen (Passwort-Tresor) ------------------------------------
@@ -893,6 +986,15 @@ pub struct LoginRow {
     pub used: i64,
 }
 
+/// Was aus dem Ablegen einer Karteikarte wurde.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum RecordPut {
+    Stored,
+    /// Die App hat schon so viele Karten, wie sie haben darf.
+    Full,
+    Failed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -951,6 +1053,70 @@ mod tests {
         assert_eq!(store.top_sites(10).len(), 4);
         store.clear_history();
         assert!(store.history_page("", 10).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn karteikarten_der_apps() {
+        let (store, dir) = temp_store("records");
+        assert_eq!(store.app_records("time", "", 10, 1000), Some((Vec::new(), false)));
+        assert_eq!(store.put_app_record("time", "e2", "{\"s\":2}", 3), RecordPut::Stored);
+        assert_eq!(store.put_app_record("time", "e1", "{\"s\":1}", 3), RecordPut::Stored);
+        assert_eq!(store.put_app_record("time", "p-1", "{\"name\":\"Kunde\"}", 3), RecordPut::Stored);
+        // Voll: Eine neue Karte kommt nicht dazu, eine vorhandene lässt sich ändern.
+        assert_eq!(store.put_app_record("time", "e3", "{}", 3), RecordPut::Full);
+        assert_eq!(store.put_app_record("time", "e1", "{\"s\":10}", 3), RecordPut::Stored);
+        assert_eq!(store.app_record_count("time"), 3);
+        // Jede App hat ihre eigenen Karten.
+        assert_eq!(store.put_app_record("weather", "e1", "{\"fremd\":true}", 3), RecordPut::Stored);
+        assert_eq!(store.app_record_count("time"), 3);
+        let (all, more) = store.app_records("time", "", 10, 1000).unwrap();
+        assert!(!more);
+        assert_eq!(
+            all,
+            vec![
+                ("e1".to_string(), "{\"s\":10}".to_string()),
+                ("e2".to_string(), "{\"s\":2}".to_string()),
+                ("p-1".to_string(), "{\"name\":\"Kunde\"}".to_string()),
+            ]
+        );
+        // Blättern: nach Stückzahl …
+        let (first, more) = store.app_records("time", "", 2, 1000).unwrap();
+        assert_eq!(first.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["e1", "e2"]);
+        assert!(more);
+        let (rest, more) = store.app_records("time", "e2", 2, 1000).unwrap();
+        assert_eq!(rest.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["p-1"]);
+        assert!(!more);
+        // … und nach Größe – eine Karte kommt aber immer mit.
+        let (first, more) = store.app_records("time", "", 10, 12).unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(more);
+        let (first, more) = store.app_records("time", "", 10, 1).unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(more);
+        // Genau so viele, wie da sind: Danach kommt nichts mehr.
+        let (exact, more) = store.app_records("time", "", 3, 1000).unwrap();
+        assert_eq!(exact.len(), 3);
+        assert!(!more);
+        // Wegwerfen – auch, was es nicht gibt. Danach ist wieder Platz.
+        assert!(store.remove_app_record("time", "e2"));
+        assert!(store.remove_app_record("time", "gibtsnicht"));
+        assert_eq!(store.app_record_count("time"), 2);
+        assert_eq!(store.put_app_record("time", "e3", "{}", 3), RecordPut::Stored);
+        assert_eq!(store.app_record_count("weather"), 1);
+        // Den Verlauf zu löschen, lässt die Karten stehen.
+        store.clear_history();
+        assert_eq!(store.app_record_count("time"), 3);
+        // Der Zettel einer App: „nichts da“ ist kein Fehler, und Schreiben meldet Erfolg.
+        assert_eq!(store.try_setting("app.time.data"), Ok(None));
+        assert!(store.try_set_setting("app.time.data", "{\"v\":1}"));
+        assert_eq!(store.try_setting("app.time.data"), Ok(Some("{\"v\":1}".to_string())));
+        // Lässt sich die Datenbank nicht lesen, ist das kein leeres Ergebnis.
+        store.db.execute_batch("DROP TABLE app_records; DROP TABLE settings;").unwrap();
+        assert_eq!(store.app_records("time", "", 10, 1000), None);
+        assert_eq!(store.try_setting("app.time.data"), Err(()));
+        assert!(!store.try_set_setting("app.time.data", "{}"));
+        assert_eq!(store.put_app_record("time", "e9", "{}", 3), RecordPut::Failed);
         let _ = std::fs::remove_dir_all(dir);
     }
 

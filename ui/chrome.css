@@ -954,6 +954,69 @@ body.stealth {
   background: var(--ring);
 }
 
+/* Rechte je Website: unter dem Namen eine Zeile kleiner Schilder. */
+.row.rights {
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.row.rights > .ic {
+  margin-top: 1px;
+  color: var(--muted);
+}
+
+.rchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.rchips .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 4px 0 7px;
+  border-radius: 12px;
+  background: var(--hover);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.row.rights:hover .chip {
+  background: var(--line);
+}
+
+.rchips .chip .ic {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+/* Ein Nein ist als solches zu erkennen. */
+.rchips .chip.no,
+.rchips .chip.no .ic {
+  color: var(--warn);
+}
+
+.rchips .chip button {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+}
+
+.rchips .chip button:hover {
+  background: var(--press);
+  color: var(--text);
+}
+
 /* Websites, die ins eigene Netz dürfen (Einstellungen). */
 .sites {
   display: flex;

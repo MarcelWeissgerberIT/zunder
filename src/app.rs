@@ -97,6 +97,8 @@ pub enum UserEvent {
     SiteData { window: WindowId, query: String, sites: Vec<(String, Vec<&'static str>)> },
     /// Website-Daten wurden gelöscht – die Liste neu holen.
     SiteDataChanged { window: WindowId, query: String },
+    /// Im Dialog zu Kamera und Mikrofon wurde „merken“ angekreuzt.
+    MediaRule { site: String, rule: crate::media::Rule },
     /// Text einer Seite für eine Anfrage an den Assistenten (JSON aus der Seite,
     /// also Material). `slot` zählt die Seiten der Anfrage durch; `usize::MAX`
     /// heißt: nicht länger warten.
@@ -119,6 +121,8 @@ pub enum UserEvent {
     Reissue { window: WindowId, tab: TabId, url: String },
     /// Nachricht von Zunders eigenem Skript in einer Seite (Passwort-Tresor).
     Bridge(native::BridgeMessage),
+    /// macOS hat den Standort genannt oder verweigert – für die eingebauten Apps.
+    Geo(crate::geo::Fix),
     /// Antwort auf eine Abfrage per Touch ID bzw. Passwort des Macs.
     Auth { token: u64, ok: bool },
     /// Ergebnis des Ausfüllens in einer Seite.
@@ -489,6 +493,9 @@ pub struct Settings {
     pub bm_bar: bool,
     /// Beim Start das Ladebild zeigen (fünf Sekunden Animation).
     pub splash: bool,
+    /// Die Lesezeichen als Kacheln auf der Startseite zeigen (der
+    /// „Schreibtisch“). Von Haus aus aus: Die Startseite bleibt leer und ruhig.
+    pub start_bookmarks: bool,
     /// Die Filterlisten des Werbeblockers von selbst auffrischen.
     pub filter_update: bool,
     /// Vor gemeldeten Betrugs- und Schadseiten schützen.
@@ -534,6 +541,7 @@ impl Settings {
             devtools: flag("devtools", false),
             bm_bar: flag("bm_bar", false),
             splash: flag("splash", true),
+            start_bookmarks: flag("start_bookmarks", false),
             filter_update: flag("filter_update", true),
             guard: flag("guard", true),
             clear_on_quit: flag("clear_on_quit", false),
@@ -574,6 +582,9 @@ pub enum NoticeAction {
     BlockerOff(WindowId, TabId, String),
     /// Das Übersetzen einer Seite abbrechen bzw. ihr Original zurückholen (Fenster, Tab).
     TranslateUndo(WindowId, TabId),
+    /// Einer eingebauten App den Standort erlauben (Fenster, Tab, App, Nummer
+    /// ihrer Anfrage – unter der bekommt sie die Antwort).
+    AppLocation(WindowId, TabId, &'static str, u32),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -682,6 +693,8 @@ pub struct App {
     /// Websites, auf denen der Werbeblocker abgeschaltet ist (gespeichert –
     /// was nur in einem privaten Fenster abgeschaltet wurde, steht hier nicht).
     pub blocker_off: Vec<String>,
+    /// Was sich Zunder je Website zu Kamera und Mikrofon gemerkt hat.
+    pub media_sites: crate::media::Rules,
     /// Das nächste Fenster, das entsteht, wird ein Stealth-Fenster.
     pub stealth_next: bool,
     /// Websites, bei denen der Hinweis auf ihre Blocker-Sperre schon kam.
@@ -701,6 +714,16 @@ pub struct App {
     pub reload_when_ready: Vec<(WindowId, TabId)>,
     /// Wann zuletzt gemeldet wurde, dass ein Download nicht zugelassen wurde.
     pub last_refusal: Option<Instant>,
+    /// Websites, bei denen schon gemeldet wurde, dass Zunder ein eingebettetes
+    /// PDF nicht ungefragt heruntergeladen hat (Stealth-Fenster für sich gezählt).
+    pub frame_files_noticed: HashSet<(bool, String)>,
+    /// Eingebaute Apps, die auf den Standort warten: Fenster, Tab, App und die
+    /// Nummer ihrer Anfrage.
+    pub geo_waiters: Vec<(WindowId, TabId, &'static str, u32)>,
+    /// Hinweise dieser Art, die gerade zu sehen sind oder warten: Kennung →
+    /// (Website, seit wann). Verdrängt einen gleich ein anderer, oder kommt
+    /// er gar nicht erst dran, zählt er nicht als gezeigt.
+    pub frame_file_notices: HashMap<u64, ((bool, String), Instant)>,
     /// Quelltexte, die gerade in einem Tab angezeigt werden (nur im Arbeitsspeicher).
     pub sources: crate::assets::Sources,
     pub next_source: u64,
@@ -821,6 +844,10 @@ fn loadable(url: &str, private: bool) -> String {
     if url.is_empty() || omnibox::is_newtab(url) {
         return blank.to_string();
     }
+    // Eine eingebaute App – unter genau ihrer Adresse.
+    if crate::apps::is_root(url) {
+        return url.to_string();
+    }
     let url = omnibox::error_retry(url).unwrap_or_else(|| url.to_string());
     match url::Url::parse(&url) {
         // Von den internen Seiten lädt ein Tab von sich aus nur die Startseite.
@@ -878,6 +905,8 @@ impl App {
             .filter(|site| !site.is_empty() && site.len() <= 253 && site.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-')))
             .take(500)
             .collect();
+        let media_sites = store.setting("media_sites").map(|text| crate::media::parse(&text)).unwrap_or_default();
+        native::set_media_rules(media_sites.clone());
         let blocker = Blocker::new(
             settings.blocker,
             settings.local_net,
@@ -937,6 +966,7 @@ impl App {
             local_sites_session: Vec::new(),
             local_noticed: HashSet::new(),
             blocker_off,
+            media_sites,
             stealth_next: false,
             wall_noticed: HashSet::new(),
             last_filter_check: Instant::now(),
@@ -945,6 +975,9 @@ impl App {
             last_external: None,
             reload_when_ready: Vec::new(),
             last_refusal: None,
+            frame_files_noticed: HashSet::new(),
+            frame_file_notices: HashMap::new(),
+            geo_waiters: Vec::new(),
             sources: Default::default(),
             next_source: 0,
             thumbs: Default::default(),
@@ -1130,6 +1163,7 @@ impl App {
                 }
             }
             UserEvent::SiteDataChanged { window, query } => self.send_panel(window, "sitedata", &query),
+            UserEvent::MediaRule { site, rule } => self.media_remembered(&site, rule),
             UserEvent::AiPage { window, job, slot, json } => self.ai_page_ready(window, job, slot, json),
             UserEvent::Ai { window, job, ev } => self.ai_event(window, job, ev),
             UserEvent::AiProbe(probe) => self.ai_probe_done(probe),
@@ -1158,6 +1192,7 @@ impl App {
                     win.send(json!({ "t": "thumb", "id": tab, "v": serial }));
                 }
             }
+            UserEvent::Geo(fix) => self.geo_arrived(fix),
             UserEvent::Reissue { window, tab, url } => {
                 if let Some(index) = self.tab_index(window, tab) {
                     self.load_quietly(window, index, &url);
@@ -1734,15 +1769,18 @@ impl App {
         if !native::url_ok(&url) {
             url = if private { NEWTAB_PRIVATE } else { NEWTAB }.to_string();
         }
-        // Der Browser selbst lädt diese Adresse – das gilt für interne Seiten
-        // wie für ein Gerät im eigenen Netz.
-        native::expect_internal(&url);
+        // Der Browser selbst lädt diese Adresse – das gilt für ein Gerät im
+        // eigenen Netz wie (gleich unten, sobald es die WebView gibt) für
+        // interne Seiten.
         native::user_navigation(None, &url);
         // Dateien brauchen Lesezugriff auf ihren Ordner – das geht erst nach dem Anlegen.
         let is_file = url.starts_with("file://");
         let initial = if is_file { None } else { Some(url.as_str()) };
         match build_content(&win.shared, tab.id, bounds, initial, None) {
             Ok(webview) => {
+                // Die Anmeldung gilt genau dieser WebView. WebKit fragt erst
+                // nach dieser Zeile, ob sie die Adresse laden darf.
+                native::expect_internal(native::key(&webview), &url);
                 if is_file && !native::load_file(&webview, &url) {
                     let _ = webview.load_url(&url);
                 }
@@ -1968,7 +2006,7 @@ impl App {
         }
         match &tab.webview {
             Some(webview) => {
-                native::expect_internal(&url);
+                native::expect_internal(native::key(webview), &url);
                 native::user_navigation(Some(native::key(webview)), &url);
                 // Der Mensch am Browser schickt den Tab woandershin: Für die
                 // nächste Seite beginnen Dialogzähler und Stummschaltung neu.
@@ -2465,6 +2503,61 @@ impl App {
         self.local_sites_changed();
     }
 
+    /// Wie viele Websites eine eigene Regel haben (für die Einstellungen).
+    pub fn rights_count(&self) -> usize {
+        let mut sites: HashSet<&str> = self.media_sites.keys().map(String::as_str).collect();
+        sites.extend(self.local_sites.iter().map(String::as_str));
+        sites.extend(self.blocker_off.iter().map(String::as_str));
+        sites.len()
+    }
+
+    /// Eine Antwort mit „merken“ aus dem Dialog zu Kamera und Mikrofon.
+    pub fn media_remembered(&mut self, site: &str, rule: crate::media::Rule) {
+        let known = self.media_sites.contains_key(site);
+        if !crate::media::site_ok(site) || rule.is_empty() || (!known && self.media_sites.len() >= crate::media::MAX_SITES) {
+            return;
+        }
+        self.media_sites.insert(site.to_string(), rule);
+        self.media_sites_changed();
+        // Wer die Übersicht gerade offen hat, sieht den neuen Stand (die
+        // Oberfläche verwirft die Nachricht, wenn etwas anderes offen ist).
+        let windows: Vec<WindowId> = self.windows.keys().copied().collect();
+        for id in windows {
+            self.send_panel(id, "rights", "");
+        }
+    }
+
+    /// Nimmt eine gemerkte Entscheidung zu Kamera (`camera`) oder Mikrofon
+    /// (`mic`) zurück: Die Website wird beim nächsten Mal wieder gefragt.
+    pub fn media_forget(&mut self, site: &str, kind: &str) {
+        let was_allowed = self.media_sites.get(site).is_some_and(|rule| match kind {
+            "camera" => rule.camera == Some(true),
+            _ => rule.microphone == Some(true),
+        });
+        if !crate::media::forget(&mut self.media_sites, site, kind) {
+            return;
+        }
+        self.media_sites_changed();
+        if was_allowed {
+            // Wer einer Website ein Recht nimmt, meint: ab sofort. Was sie in
+            // einem offenen Tab gerade aufnimmt, endet deshalb gleich mit.
+            for tab in self.windows.values().flat_map(|win| win.tabs.iter()) {
+                let on_site = native::media_site_of(&tab.url).as_deref() == Some(site);
+                if let (true, Some(webview)) = (on_site, tab.webview.as_ref()) {
+                    native::stop_capture(webview, kind == "camera", kind == "mic");
+                }
+            }
+        }
+    }
+
+    fn media_sites_changed(&mut self) {
+        native::set_media_rules(self.media_sites.clone());
+        self.store.set_setting(
+            "media_sites",
+            &serde_json::to_string(&self.media_sites).unwrap_or_else(|_| "{}".into()),
+        );
+    }
+
     fn local_sites_changed(&mut self) {
         // Gemerkt wird nur das Dauerhafte; es gilt beides.
         let all: Vec<String> = self.local_sites.iter().chain(&self.local_sites_session).cloned().collect();
@@ -2648,21 +2741,30 @@ impl App {
         action: Option<(&str, NoticeAction)>,
         timeout_ms: u64,
     ) -> bool {
-        let Some(win) = self.windows.get(&id) else {
-            return false;
-        };
-        let Some(site) = win.tabs.iter().find(|candidate| candidate.id == tab).map(|tab| crate::shield::host_of(&tab.url)) else {
-            return false;
-        };
+        self.notice_from_id(id, tab, text, action, timeout_ms).is_some()
+    }
+
+    /// Wie `notice_from`, nennt aber die Kennung des Hinweises (`None`: nicht
+    /// gezeigt) – wer sie hat, erfährt über `noticeGone`, wann er wieder verschwand.
+    pub fn notice_from_id(
+        &mut self,
+        id: WindowId,
+        tab: TabId,
+        text: String,
+        action: Option<(&str, NoticeAction)>,
+        timeout_ms: u64,
+    ) -> Option<u64> {
+        let win = self.windows.get(&id)?;
+        let site = win.tabs.iter().find(|candidate| candidate.id == tab).map(|tab| crate::shield::host_of(&tab.url))?;
         if !win.shows(tab) {
-            return false;
+            return None;
         }
         let owned = action.is_some();
         let notice = self.notice_with(id, text, action, timeout_ms, 0);
         if owned {
             self.notice_owners.insert(notice, (id, tab, site));
         }
-        true
+        Some(notice)
     }
 
     /// Hinweise, die zu einem Tab gehören, haben sich erledigt. Mit `site`
@@ -2677,7 +2779,11 @@ impl App {
             .collect();
         for notice in gone {
             self.notice_owners.remove(&notice);
-            self.notices.remove(&notice);
+            // Stand dort die Frage einer App nach dem Standort, bleibt sie damit
+            // unbeantwortet – das erfährt die App (der Tab kann sie noch zeigen).
+            if let Some(NoticeAction::AppLocation(tab_window, tab, app, n)) = self.notices.remove(&notice) {
+                self.app_location_unanswered(tab_window, tab, app, n);
+            }
             if let Some(win) = self.windows.get_mut(&id) {
                 win.send(json!({ "t": "noticeHide", "id": notice }));
             }
@@ -2746,6 +2852,16 @@ impl App {
         notice_id
     }
 
+    /// Lädt offene Startseiten neu – nachdem sich geändert hat, was sie zeigen.
+    /// (Private Fenster haben ihre eigene Startseite ohne Lesezeichen.)
+    pub fn reload_start_pages(&mut self) {
+        for tab in self.windows.values().flat_map(|win| win.tabs.iter()) {
+            if let (true, Some(webview)) = (tab.url == NEWTAB, tab.webview.as_ref()) {
+                let _ = webview.reload();
+            }
+        }
+    }
+
     /// Bereitet die Daten der Startseite vor (Lesezeichen und oft Besuchtes).
     pub fn refresh_newtab(&mut self) {
         let wallpaper = self
@@ -2753,11 +2869,17 @@ impl App {
             .setting("wallpaper")
             .filter(|id| crate::wallpapers::exists(id))
             .unwrap_or_default();
+        // Lesezeichen liegen nur auf der Startseite, wenn das eingeschaltet ist
+        // (der „Schreibtisch“, auf dem sie sich anordnen lassen). Sonst bekommt
+        // die Seite sie gar nicht erst.
+        let (bookmarks, folders) = if self.settings.start_bookmarks {
+            (self.store.bookmarks("", 300), self.store.bookmark_folders())
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let data = json!({
-            // Alle Lesezeichen samt Ordnern: Die Startseite ist die Schreibtisch-
-            // Ansicht, auf der sie sich anordnen lassen.
-            "bookmarks": self.store.bookmarks("", 300),
-            "folders": self.store.bookmark_folders(),
+            "bookmarks": bookmarks,
+            "folders": folders,
             "top": self.store.top_sites(12),
             "wallpaper": wallpaper,
             "wallpapers": crate::wallpapers::list(),
@@ -2920,7 +3042,22 @@ impl App {
                 println!("HOOKS {}", native::installed_hooks().join(" "));
                 let _ = std::io::stdout().flush();
             }
+            // geofake <breite> <länge>: als käme dieser Standort von macOS –
+            // durch dieselbe Stelle, ohne die Ortung zu berühren.
+            "geofake" => {
+                let mut parts = rest.split_whitespace().map(|part| part.parse::<f64>());
+                if let (Some(Ok(latitude)), Some(Ok(longitude))) = (parts.next(), parts.next()) {
+                    crate::geo::deliver_for_test(latitude, longitude);
+                }
+            }
             "abortmodal" => native::abort_modal_after(rest.trim().parse().unwrap_or(1.0)),
+            // Verwirft, was für einen Dialog geplant, aber nicht geschehen ist.
+            "modalclear" => native::forget_modal_plans(),
+            // „modalclick 2.5 Erlauben“: nach 2,5 Sekunden den Knopf mit dieser Aufschrift drücken.
+            "modalclick" => {
+                let (seconds, title) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+                native::click_modal_after(seconds.parse().unwrap_or(1.0), title.trim());
+            }
             "appearance" => native::force_appearance(rest.trim() == "dark"),
             "echo" => {
                 println!("ECHO {rest}");

@@ -6,9 +6,12 @@
 //!                      Oberflächen können dem Browser Befehle schicken)
 //!   zunder://newtab/   Startseite eines neuen Tabs (samt ihren Hintergründen unter wp/)
 //!   zunder://error/    Fehlerseite
+//!   zunder://app-…/    eingebaute Apps (`apps.rs`) – jede mit ihrer eigenen
+//!                      Schutzregel, die sagt, wohin sie ins Netz darf
 //!
 //! Interne Seiten in einem Tab haben keinerlei Sonderrechte: Sie bekommen ihre
-//! Daten beim Ausliefern mit und können dem Browser nichts befehlen.
+//! Daten beim Ausliefern mit und können dem Browser nichts befehlen. (Eine App
+//! kann ihn um das bitten, was für sie eingetragen ist – siehe `apps.rs`.)
 //!
 //! Jede WebView bekommt nur, was zu ihrer Aufgabe gehört ([`Role`]): Ein Tab
 //! erhält weder die Symbolleiste noch den Assistenten, die Oberfläche keine
@@ -89,6 +92,15 @@ fn embedded(name: &str) -> Option<&'static [u8]> {
         "bubble.html" => ui!("bubble.html"),
         "bubble.css" => ui!("bubble.css"),
         "bubble.js" => ui!("bubble.js"),
+        "apps.css" => ui!("apps.css"),
+        "apps.js" => ui!("apps.js"),
+        "app-weather.html" => ui!("app-weather.html"),
+        "app-weather.css" => ui!("app-weather.css"),
+        "app-weather.js" => ui!("app-weather.js"),
+        "app-weather-map.js" => ui!("app-weather-map.js"),
+        "app-time.html" => ui!("app-time.html"),
+        "app-time.css" => ui!("app-time.css"),
+        "app-time.js" => ui!("app-time.js"),
         _ => return None,
     })
 }
@@ -195,6 +207,16 @@ fn respond(status: u16, content_type: &str, body: Cow<'static, [u8]>) -> Respons
         .unwrap_or_else(|_| Response::new(Cow::Borrowed(&[][..])))
 }
 
+/// Wie [`respond`], aber mit der Schutzregel einer eingebauten App statt der
+/// allgemeinen: Sie nennt die Dienste, die diese App ansprechen darf.
+fn respond_app(app: &crate::apps::App, content_type: &str, body: Cow<'static, [u8]>) -> Response<Cow<'static, [u8]>> {
+    let mut response = respond(200, content_type, body);
+    if let Ok(rule) = wry::http::HeaderValue::from_str(&crate::apps::csp(app)) {
+        response.headers_mut().insert("Content-Security-Policy", rule);
+    }
+    response
+}
+
 fn not_found() -> Response<Cow<'static, [u8]>> {
     respond(404, "text/plain; charset=utf-8", Cow::Borrowed(b"404"))
 }
@@ -235,14 +257,41 @@ fn serve_path(request: &Request<Vec<u8>>, host: &str, file: &str, ctx: &PageCtx)
                 data
             };
             let json = format!(
-                "{{\"strings\":{},\"private\":{},\"stealth\":{},\"tor\":{},\"data\":{}}}",
+                "{{\"strings\":{},\"private\":{},\"stealth\":{},\"tor\":{},\"apps\":{},\"data\":{}}}",
                 i18n::json(),
                 ctx.private,
                 ctx.stealth,
                 serde_json::Value::from(ctx.tor.clone()),
+                crate::apps::list(),
                 data
             );
             html(page("newtab.html", &json))
+        }
+        // Eine eingebaute App: ihre Seite …
+        (host, "") if content && crate::apps::by_host(host).is_some() => {
+            let Some(app) = crate::apps::by_host(host) else {
+                return not_found();
+            };
+            let json = format!(
+                "{{\"strings\":{},\"app\":\"{}\",\"private\":{},\"stealth\":{},\"lang\":\"{}\",\"region\":\"{}\"}}",
+                i18n::json(),
+                app.id,
+                ctx.private,
+                ctx.stealth,
+                i18n::lang_code(),
+                crate::apps::region_of(&crate::native::preferred_language())
+            );
+            match page(app.page, &json) {
+                Some(bytes) => respond_app(app, mime("x.html"), Cow::Owned(bytes)),
+                None => not_found(),
+            }
+        }
+        // … und genau die Dateien, die zu ihr gehören.
+        (host, name) if content && crate::apps::by_host(host).is_some_and(|app| app.files.contains(&name)) => {
+            match (crate::apps::by_host(host), load(name)) {
+                (Some(app), Some(bytes)) => respond_app(app, mime(name), bytes),
+                _ => not_found(),
+            }
         }
         ("error", "") if content => {
             let json = format!("{{\"strings\":{}}}", i18n::json());
@@ -344,5 +393,58 @@ mod tests {
         assert_eq!(status(Role::Assistant, false, "zunder://ui/index.html"), 404);
         assert_eq!(status(Role::Bubble, false, "zunder://ui/bubble.html"), 200);
         assert_eq!(status(Role::Bubble, false, "zunder://ui/index.html"), 404);
+    }
+
+    fn response(role: Role, url: &str) -> Response<Cow<'static, [u8]>> {
+        let ctx = PageCtx {
+            private: false,
+            stealth: false,
+            tor: None,
+            role,
+            splash: false,
+            newtab: Arc::new(Mutex::new(String::new())),
+            sources: Default::default(),
+            thumbs: Default::default(),
+        };
+        let request = Request::builder().uri(url).body(Vec::new()).unwrap();
+        serve(&request, &ctx)
+    }
+
+    #[test]
+    fn eine_app_bekommt_ihre_seite_ihre_dateien_und_ihre_schutzregel() {
+        for app in crate::apps::APPS {
+            let root = crate::apps::url_of(app.id);
+            let page = response(Role::Content, &root);
+            assert_eq!(page.status().as_u16(), 200, "{root}");
+            // Ihre eigene Schutzregel – mit genau ihren Diensten.
+            let rule = page.headers().get("Content-Security-Policy").unwrap().to_str().unwrap();
+            assert_eq!(rule, crate::apps::csp(app));
+            assert_eq!(page.headers().get("X-Frame-Options").unwrap(), "DENY");
+            // Jede Datei, die die Seite nachlädt, ist da – und trägt dieselbe Regel.
+            let html = String::from_utf8_lossy(page.body()).to_string();
+            for file in app.files {
+                assert!(html.contains(&format!("\"{file}\"")), "{file} wird von der Seite nicht geladen");
+                let got = response(Role::Content, &format!("{root}{file}"));
+                assert_eq!(got.status().as_u16(), 200, "{file}");
+                assert_eq!(got.headers().get("Content-Security-Policy").unwrap().to_str().unwrap(), crate::apps::csp(app));
+            }
+            // Die Vorlage selbst, fremde Dateien und die Oberfläche des Browsers gibt es dort nicht.
+            for other in [app.page, "chrome.js", "newtab.js", "index.html", "icons.svg", "../ui/chrome.js"] {
+                assert_eq!(response(Role::Content, &format!("{root}{other}")).status().as_u16(), 404, "{other}");
+            }
+            // Und nur ein Tab bekommt sie – nicht der Rahmen, der Assistent oder die Sprechblase.
+            for role in [Role::Chrome, Role::Assistant, Role::Bubble] {
+                assert_eq!(response(role, &root).status().as_u16(), 404);
+            }
+        }
+        // Eine App, die es nicht gibt, gibt es nicht.
+        assert_eq!(response(Role::Content, "zunder://app-nix/").status().as_u16(), 404);
+        // Die Startseite nennt die Apps mit genau ihren Adressen.
+        let start = String::from_utf8_lossy(response(Role::Content, "zunder://newtab/").body()).to_string();
+        assert!(start.contains("zunder://app-weather/"));
+        // Die übrigen eigenen Seiten behalten die allgemeine Regel: nichts aus dem Netz.
+        let rule = response(Role::Content, "zunder://newtab/").headers().get("Content-Security-Policy").unwrap().to_str().unwrap().to_string();
+        assert_eq!(rule, CSP);
+        assert!(!rule.contains("https:"));
     }
 }

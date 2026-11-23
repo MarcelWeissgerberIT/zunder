@@ -673,11 +673,11 @@ impl App {
             }
             _ => {}
         }
-        // Sonst das, was auf dem Mac läuft – nie von selbst ein Dienst im Netz.
-        if device {
-            return Some(Engine::Device);
-        }
-        ollama.map(Engine::Ollama)
+        // Sonst Apples Modell – nie von selbst ein Dienst im Netz. Auch Ollama
+        // nimmt Zunder nur, wenn es ausdrücklich gewählt ist: An seinem Anschluss
+        // auf diesem Mac kann jedes Programm lauschen, und wer dort antwortet,
+        // bekommt den Text der Seite.
+        device.then_some(Engine::Device)
     }
 
     fn assistant_state(&mut self, window: WindowId) {

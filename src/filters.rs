@@ -859,42 +859,50 @@ impl GuardIndex {
     }
 
     /// Steht diese Adresse als ganze Seite auf einer der Listen?
+    #[cfg(test)]
     pub fn matches(&self, url: &str) -> bool {
-        let Ok(parsed) = url::Url::parse(url) else {
-            return false;
-        };
+        self.matched(url).is_some()
+    }
+
+    /// Trifft ein Eintrag diese Adresse? Zurück kommt, was jemand übergeht,
+    /// der die Warnung dazu übergeht: `h:<rechner>` – der Rechner der Adresse
+    /// selbst, auch wenn die Liste einen Namen darüber meldet – oder
+    /// `p:<rechner><pfad>` für eine einzelne gemeldete Adresse. Es ist immer
+    /// das Engste: nicht die Nachbarn unter demselben gemeldeten Namen und
+    /// nicht, was sonst noch über denselben Rechner gemeldet ist.
+    pub fn matched(&self, url: &str) -> Option<String> {
+        let parsed = url::Url::parse(url).ok()?;
         if !matches!(parsed.scheme(), "http" | "https") {
-            return false;
+            return None;
         }
-        let Some(host) = guard_host(&parsed) else {
-            return false;
-        };
+        let host = guard_host(&parsed)?;
         // Der Rechner selbst oder einer, unter dem er hängt.
         let mut rest = host.as_str();
         loop {
             if self.hosts.contains(rest) {
-                return true;
+                return Some(format!("h:{host}"));
             }
             match rest.split_once('.') {
                 Some((_, parent)) if parent.contains('.') => rest = parent,
                 _ => break,
             }
         }
-        let Some(prefixes) = self.paths.get(&host) else {
-            return false;
-        };
+        let prefixes = self.paths.get(&host)?;
         let mut tail = parsed.path().to_string();
         if let Some(query) = parsed.query() {
             tail.push('?');
             tail.push_str(query);
         }
         let tail = plain_escapes(&tail);
-        prefixes.iter().any(|prefix| {
-            tail.strip_prefix(prefix.as_str()).is_some_and(|after| {
-                // Danach muss die Adresse enden oder ein Trennzeichen folgen.
-                after.chars().next().is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '%')))
+        prefixes
+            .iter()
+            .find(|prefix| {
+                tail.strip_prefix(prefix.as_str()).is_some_and(|after| {
+                    // Danach muss die Adresse enden oder ein Trennzeichen folgen.
+                    after.chars().next().is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '%')))
+                })
             })
-        })
+            .map(|prefix| format!("p:{host}{prefix}"))
     }
 }
 
@@ -1512,6 +1520,11 @@ mod tests {
         for url in ["https://forms.example/pfad/xy", "https://forms.example/anders", "https://notlisted.example./", "https://example./"] {
             assert!(!index.matches(url), "{url}");
         }
+        // Welcher Eintrag es war: der gemeldete Rechner – oder genau die eine gemeldete Adresse.
+        assert_eq!(index.matched("https://sub.listed.example/x").as_deref(), Some("h:sub.listed.example"));
+        assert_eq!(index.matched("https://listed.example./x").as_deref(), Some("h:listed.example"));
+        assert_eq!(index.matched("https://forms.example/pfad/x?y=1").as_deref(), Some("p:forms.example/pfad/x"));
+        assert_eq!(index.matched("https://forms.example/"), None);
         assert_eq!(plain_escapes("/%70fad/%2fx/%zz/ä%e4"), "/pfad/%2Fx/%zz/ä%E4");
     }
 

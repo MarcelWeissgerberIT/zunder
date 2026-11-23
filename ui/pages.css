@@ -695,3 +695,14 @@ body.source.wrap #src {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ---- Eingebaute Apps ---------------------------------------------------------- */
+
+.tile.app .icon {
+  color: var(--accent);
+}
+
+.tile.app .icon svg {
+  width: 28px;
+  height: 28px;
+}

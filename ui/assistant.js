@@ -498,7 +498,9 @@
     let kind = '';
     if (models && models.probed) {
       if (!models.engine) {
-        text = S.ai_none;
+        // Läuft Ollama, fehlt nur die Wahl – das soll man sehen.
+        const ollama = models.ollama || {};
+        text = ollama.running && (ollama.models || []).length && !models.private ? S.ai_none_pick : S.ai_none;
         symbol = 'warning';
         kind = 'none';
       } else if (models.engine.local) {

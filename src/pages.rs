@@ -107,6 +107,8 @@ impl App {
             PageEvent::Finished(url) => self.page_finished(window, index, url),
             PageEvent::Ping { origin, body, main } => match body.strip_prefix("q:") {
                 Some(counts) => self.page_asked(window, index, &origin, main, counts),
+                // Eine eingebaute App bittet den Browser um etwas.
+                None if main && body.starts_with("A:") => self.app_message(window, index, &origin, &body[2..]),
                 None => self.page_ping(window, index, &origin, &body),
             },
             PageEvent::OpenInNewTab(url) => {
@@ -473,7 +475,7 @@ impl App {
             // allein der Browser. Private Fenster zeigen keine Lesezeichen.
             let from_start_page = url::Url::parse(origin)
                 .is_ok_and(|u| u.scheme() == "zunder" && u.host_str() == Some("newtab"));
-            if from_start_page && !private {
+            if from_start_page && !private && self.settings.start_bookmarks {
                 if let Ok(data) = serde_json::from_str::<serde_json::Value>(change) {
                     let id = data.get("id").and_then(serde_json::Value::as_i64).unwrap_or(0);
                     let folder = data.get("folder").and_then(serde_json::Value::as_str).unwrap_or("");
@@ -677,7 +679,7 @@ impl App {
         tab.typed = false;
         if let Some(webview) = &tab.webview {
             tab.loading = true;
-            native::expect_internal(page.as_str());
+            native::expect_internal(native::key(webview), page.as_str());
             let _ = webview.load_url(page.as_str());
         }
         win.dirty = true;
@@ -725,6 +727,267 @@ impl App {
         // ein Tab im Hintergrund meldet sich, sobald er vorn ist und es wieder versucht.
         if self.notice_from(window, tab_id, text, Some((t("allow"), NoticeAction::AllowLocal(window, tab_id, site.clone()))), 14000) {
             self.local_noticed.insert(site);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Eingebaute Apps (`apps.rs`)
+    // -----------------------------------------------------------------------
+
+    /// Schickt einer App die Antwort auf ihre Anfrage – nur, solange der Tab
+    /// noch genau diese App zeigt. Was der Browser über den Tab weiß, hinkt dem
+    /// Geschehen aber hinterher; deshalb prüft die Antwort an Ort und Stelle
+    /// noch einmal selbst, in welchem Dokument sie läuft (`apps::reply`).
+    pub fn app_reply(&self, window: WindowId, tab: TabId, app: &str, n: u32, answer: Value) {
+        let shown = crate::apps::url_of(app);
+        let webview = self
+            .windows
+            .get(&window)
+            .and_then(|win| win.tabs.iter().find(|candidate| candidate.id == tab))
+            .filter(|tab| tab.url == shown)
+            .and_then(|tab| tab.webview.as_ref());
+        if let Some(webview) = webview {
+            let _ = webview.evaluate_script(&crate::apps::reply(app, n, answer));
+        }
+    }
+
+    /// Eine eingebaute App bittet den Browser um etwas: ihren Zettel, ihre
+    /// Karteikarten, den Standort. Angenommen wird das nur von der Seite der
+    /// App selbst – unter genau ihrer Adresse, die allein der Browser lädt –,
+    /// und nur, was für diese App eingetragen ist.
+    fn app_message(&mut self, window: WindowId, index: usize, origin: &str, body: &str) {
+        use crate::apps::Op;
+        let Some(app) = crate::apps::by_url(origin).filter(|_| crate::apps::is_root(origin)) else {
+            return;
+        };
+        let Some(win) = self.windows.get(&window) else {
+            return;
+        };
+        let Some(tab) = win.tabs.get(index).filter(|tab| tab.url == origin) else {
+            return;
+        };
+        let (private, stealth, tab_id) = (win.private, win.stealth, tab.id);
+        let view = tab.webview.as_ref().map(native::key);
+        let call = match crate::apps::parse(body) {
+            Ok(call) => call,
+            // Unbrauchbar, aber mit lesbarer Nummer: Die Seite erfährt es,
+            // statt auf eine Antwort zu warten.
+            Err(Some(n)) => {
+                self.app_reply(window, tab_id, app.id, n, json!({ "state": "invalid" }));
+                return;
+            }
+            Err(None) => return,
+        };
+        let n = call.n;
+        match call.op {
+            // Der Zettel der App. Private Fenster lesen und schreiben ihn nicht.
+            // Lässt sich die Datenbank nicht lesen oder schreiben, erfährt die
+            // App genau das – ein leerer Zettel wäre eine falsche Auskunft, auf
+            // die hin sie den gesicherten überschriebe.
+            Op::Load => {
+                let stored = if private { Ok(None) } else { self.store.try_setting(&crate::apps::data_key(app.id)) };
+                let answer = match stored {
+                    Ok(data) => {
+                        let data = data.filter(|text| !text.is_empty()).unwrap_or_else(|| "{}".to_string());
+                        json!({ "state": "ok", "data": data, "kept": !private })
+                    }
+                    Err(()) => json!({ "state": "failed" }),
+                };
+                self.app_reply(window, tab_id, app.id, n, answer);
+            }
+            Op::Save(data) => {
+                let state = if private {
+                    "private"
+                } else if self.store.try_set_setting(&crate::apps::data_key(app.id), &data) {
+                    "ok"
+                } else {
+                    "failed"
+                };
+                self.app_reply(window, tab_id, app.id, n, json!({ "state": state }));
+            }
+            // Die Karteikarten der App – nur, wo welche für sie eingetragen
+            // sind. Private Fenster lesen und schreiben auch sie nicht.
+            Op::List { after, limit } => {
+                let found = if private || app.records == 0 {
+                    Some((Vec::new(), false))
+                } else {
+                    self.store.app_records(app.id, &after, limit, crate::apps::LIST_BYTES)
+                };
+                let answer = match found {
+                    Some((items, more)) => {
+                        // Weiter geht es nach der letzten Karte dieser Antwort.
+                        let next = if more { items.last().map(|(id, _)| id.clone()) } else { None };
+                        let items: Vec<Value> = items.into_iter().map(|(id, data)| json!([id, data])).collect();
+                        json!({ "state": "ok", "items": items, "next": next, "kept": !private && app.records > 0 })
+                    }
+                    None => json!({ "state": "failed" }),
+                };
+                self.app_reply(window, tab_id, app.id, n, answer);
+            }
+            Op::Put { id, data } => {
+                use crate::store::RecordPut;
+                let state = if app.records == 0 {
+                    "refused"
+                } else if private {
+                    "private"
+                } else {
+                    match self.store.put_app_record(app.id, &id, &data, app.records) {
+                        RecordPut::Stored => "ok",
+                        RecordPut::Full => "full",
+                        RecordPut::Failed => "failed",
+                    }
+                };
+                self.app_reply(window, tab_id, app.id, n, json!({ "state": state }));
+            }
+            Op::Remove(id) => {
+                let state = if app.records == 0 {
+                    "refused"
+                } else if private {
+                    "private"
+                } else if self.store.remove_app_record(app.id, &id) {
+                    "ok"
+                } else {
+                    "failed"
+                };
+                self.app_reply(window, tab_id, app.id, n, json!({ "state": state }));
+            }
+            // Die App sichert gleich eine Datei, die sie selbst erzeugt hat –
+            // mit einer der Endungen, die für sie eingetragen sind.
+            Op::FileName(name) => {
+                let state = match view.filter(|_| crate::apps::may_export(app, &name)) {
+                    Some(view) => {
+                        native::expect_file_name(view, name);
+                        "ok"
+                    }
+                    None => "refused",
+                };
+                self.app_reply(window, tab_id, app.id, n, json!({ "state": state }));
+            }
+            Op::Forget => {
+                self.store.set_setting(&crate::apps::location_key(app.id), "");
+                self.geo_waiters.retain(|(_, _, waiting, _)| *waiting != app.id);
+                self.app_reply(window, tab_id, app.id, n, json!({ "state": "ok" }));
+            }
+            Op::Location => {
+                if !app.location {
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "refused" }));
+                } else if stealth {
+                    // Ein Stealth-Fenster gibt nichts über das Gerät preis –
+                    // auch nicht, wo es steht.
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "refused", "why": "stealth" }));
+                } else if self.store.setting(&crate::apps::location_key(app.id)).as_deref() == Some("1") {
+                    self.app_locate(window, tab_id, app.id, n);
+                } else {
+                    // Erst fragen – in der Leiste des Browsers, nicht in der Seite.
+                    let text = t("n_app_location").replace("{app}", t(app.name));
+                    let action = NoticeAction::AppLocation(window, tab_id, app.id, n);
+                    let asked = self.notice_from(window, tab_id, text, Some((t("allow"), action)), 30000);
+                    let state = if asked { "asking" } else { "failed" };
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": state }));
+                }
+            }
+        }
+    }
+
+    /// Der Mensch am Browser hat einer App den Standort erlaubt. Das gilt, bis
+    /// er es in der App zurücknimmt – in einem privaten Fenster nur für dieses
+    /// eine Mal: Dort merkt sich der Browser auch eine Zustimmung nicht.
+    pub fn app_location_allowed(&mut self, window: WindowId, tab: TabId, app: &'static str, n: u32) {
+        let Some((private, stealth)) = self.windows.get(&window).map(|win| (win.private, win.stealth)) else {
+            return;
+        };
+        if stealth || crate::apps::by_id(app).is_none_or(|known| !known.location) {
+            return;
+        }
+        if !private {
+            self.store.set_setting(&crate::apps::location_key(app), "1");
+        }
+        self.app_locate(window, tab, app, n);
+    }
+
+    /// Die Frage nach dem Standort ist verschwunden, ohne dass jemand „Erlauben“
+    /// gewählt hat (abgelaufen, geschlossen, verdrängt): Die App erfährt es,
+    /// statt weiter zu warten.
+    pub fn app_location_unanswered(&self, window: WindowId, tab: TabId, app: &'static str, n: u32) {
+        self.app_reply(window, tab, app, n, json!({ "state": "unanswered" }));
+    }
+
+    /// Fragt macOS nach dem Standort; die Antwort kommt über `geo_arrived`.
+    fn app_locate(&mut self, window: WindowId, tab: TabId, app: &'static str, n: u32) {
+        self.geo_waiters.retain(|(waiting_window, waiting_tab, _, _)| !(*waiting_window == window && *waiting_tab == tab));
+        if self.geo_waiters.len() >= 8 {
+            self.geo_waiters.remove(0);
+        }
+        self.geo_waiters.push((window, tab, app, n));
+        self.app_reply(window, tab, app, n, json!({ "state": "locating" }));
+        crate::geo::request();
+    }
+
+    /// macOS hat den Standort genannt oder verweigert: Jede App, die darauf
+    /// wartet, bekommt ihn – gerundet (`apps::position`).
+    pub fn geo_arrived(&mut self, fix: crate::geo::Fix) {
+        use crate::geo::Fix;
+        if crate::dev::enabled() {
+            println!("GEO {fix:?} wartend={}", self.geo_waiters.len());
+        }
+        let answer = match fix {
+            Fix::At(latitude, longitude) => match crate::apps::position(latitude, longitude) {
+                Some((latitude, longitude)) => json!({ "state": "ok", "lat": latitude, "lon": longitude }),
+                None => json!({ "state": "failed" }),
+            },
+            Fix::Denied => json!({ "state": "denied" }),
+            Fix::Failed => json!({ "state": "failed" }),
+        };
+        for (window, tab, app, n) in std::mem::take(&mut self.geo_waiters) {
+            self.app_reply(window, tab, app, n, answer.clone());
+        }
+    }
+
+    /// WebKit wollte den Inhalt eines eingebetteten Rahmens von sich aus
+    /// herunterladen – mit der Härtung und im Stealth-Fenster macht es das mit
+    /// PDFs, die es dort nicht anzeigt. Zunder hat den Download abgesagt. Das
+    /// erfährt man einmal je Website: Sonst bliebe der leere Rahmen ein Rätsel.
+    fn frame_file_refused(&mut self, window: WindowId, index: usize, pdf: bool) {
+        let Some(win) = self.windows.get(&window) else {
+            return;
+        };
+        let Some(tab) = win.tabs.get(index) else {
+            return;
+        };
+        let stealth = win.stealth;
+        // Gezählt wird nach dem Teil des Namens, der zählt – wie beim Zugriff
+        // ins eigene Netz: Unterbereiche derselben Website melden sich nicht einzeln.
+        let name = crate::sites::domain_of(&tab.url).unwrap_or_else(|| crate::shield::host_of(&tab.url));
+        let known = (stealth, name);
+        if self.frame_files_noticed.contains(&known) {
+            return;
+        }
+        let tab_id = tab.id;
+        let site = self.asking_site(window, tab_id);
+        // Warum es sich nicht anzeigen lässt: Stealth-Fenster, Zunders Härtung –
+        // oder der Blockierungsmodus von macOS, der für jede WebView gilt.
+        let key = if !pdf {
+            "n_frame_file"
+        } else if stealth {
+            "n_frame_pdf_stealth"
+        } else if self.settings.hardened {
+            "n_frame_pdf"
+        } else {
+            "n_frame_pdf_system"
+        };
+        // „Einmal je Website“ zählt erst, wenn der Hinweis wirklich zu sehen war:
+        // Ein Tab im Hintergrund meldet sich, wenn er vorn ist und es wieder
+        // vorkommt – und verdrängt ihn gleich ein anderer Hinweis, nimmt
+        // `noticeGone` die Zählung zurück.
+        if let Some(notice) = self.notice_from_id(window, tab_id, t(key).replace("{site}", &site), None, 12000) {
+            if self.frame_files_noticed.len() >= 500 {
+                self.frame_files_noticed.clear();
+            }
+            self.frame_files_noticed.insert(known.clone());
+            if self.frame_file_notices.len() >= 16 {
+                self.frame_file_notices.clear();
+            }
+            self.frame_file_notices.insert(notice, (known, std::time::Instant::now()));
         }
     }
 
@@ -808,7 +1071,7 @@ impl App {
                 page.query_pairs_mut().append_pair("z", native::seal());
                 if let Some(webview) = &tab.webview {
                     tab.loading = true;
-                    native::expect_internal(page.as_str());
+                    native::expect_internal(native::key(webview), page.as_str());
                     let _ = webview.load_url(page.as_str());
                 }
             }
@@ -859,6 +1122,7 @@ impl App {
                 self.local_request(window, index, &url, &from, in_place, replay)
             }
             NavKind::LocalBlocked { url } => self.local_blocked(window, index, &url),
+            NavKind::FrameFile { pdf } => self.frame_file_refused(window, index, pdf),
             NavKind::OAuthCode { url } => self.oauth_returned(window, index, &url),
             NavKind::Guard { url, in_place } => {
                 // Eine gemeldete Betrugs- oder Schadseite: im Tab die Warnung,

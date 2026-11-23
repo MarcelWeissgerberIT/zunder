@@ -119,6 +119,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSMicrophoneUsageDescription</key>
     <string>Webseiten können das Mikrofon nur nutzen, wenn du es ihnen erlaubst.</string>
 
+    <!-- Standort: nur für eingebaute Apps (Wetter), nie für Webseiten – und
+         erst, wenn du es der App erlaubt hast. -->
+    <key>NSLocationUsageDescription</key>
+    <string>Die eingebaute Wetter-App zeigt damit das Wetter an deinem Ort. Webseiten bekommen deinen Standort nicht.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Die eingebaute Wetter-App zeigt damit das Wetter an deinem Ort. Webseiten bekommen deinen Standort nicht.</string>
+
     <!-- Als Browser anmelden: Links und HTML-Dateien öffnen. -->
     <key>CFBundleURLTypes</key>
     <array>
@@ -166,6 +173,7 @@ else
 <plist version="1.0"><dict>
     <key>com.apple.security.device.camera</key><true/>
     <key>com.apple.security.device.audio-input</key><true/>
+    <key>com.apple.security.personal-information.location</key><true/>
 </dict></plist>
 ENTITLEMENTS
     codesign --force --options runtime --entitlements "$ENT" --sign - "$APP" >/dev/null 2>&1

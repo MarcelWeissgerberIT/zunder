@@ -1,0 +1,11 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="#fff" />
+  <g fill="none" stroke="#000" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M284 627C198 627 128 557 128 471C128 385 198 315 284 315C290 315 296 316 302 317C302 206 392 116 503 116C608 116 694 196 703 299C713 296 724 293 735 293C822 293 891 368 891 460C891 552 822 627 735 627Z" />
+    <g id="snowflakes">
+      <path d="M300 701V848M236 738L364 812M236 812L364 738" />
+      <path d="M512 792V939M448 829L576 903M448 903L576 829" />
+      <path d="M724 701V848M660 738L788 812M660 812L788 738" />
+    </g>
+  </g>
+</svg>

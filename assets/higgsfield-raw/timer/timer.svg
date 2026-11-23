@@ -1,0 +1,9 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="#fff" />
+  <g id="stopwatch" fill="none" stroke="#000" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="389" y="102" width="246" height="87" rx="29" />
+    <path d="M512 189V264" />
+    <circle cx="512" cy="607" r="337" />
+    <path d="M512 607L702 439" />
+  </g>
+</svg>

@@ -1,0 +1,7 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="#fff" />
+  <g id="drizzle" fill="none" stroke="#000" stroke-width="42" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M282 677C197 677 128 608 128 523S202 366 292 371C292 251 389 153 510 153C625 153 719 245 720 357C812 345 890 418 890 516C890 605 823 677 740 677Z" />
+    <path d="M340 786V872M510 786V872M684 786V872" />
+  </g>
+</svg>

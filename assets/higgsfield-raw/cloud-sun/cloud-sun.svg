@@ -1,0 +1,10 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="white" />
+  <g fill="none" stroke="black" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
+    <g id="sun">
+      <path d="M523 411 A139 139 0 1 1 746 578" />
+      <path d="M658 201 V270 M460 275 L511 327 M805 327 L856 275 M852 467 H930 M820 590 L863 633" />
+    </g>
+    <path id="cloud" d="M244 833 C171 833 111 774 111 701 C111 628 171 569 244 569 C252 569 260 570 268 572 C280 485 357 416 449 416 C534 416 605 472 616 546 C677 533 741 572 758 633 C801 648 827 681 827 725 C827 785 780 833 721 833 Z" />
+  </g>
+</svg>

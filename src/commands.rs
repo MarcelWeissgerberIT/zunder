@@ -76,8 +76,13 @@ impl App {
                 crate::app::debug_timing("oberflaeche_bereit");
             }
             "navigate" => {
+                let typed = text("text");
                 let engine = omnibox::engine(&self.settings.engine);
-                if let Some(url) = omnibox::resolve(&text("text"), engine) {
+                // Die Adresse einer eingebauten App lässt sich eintippen – nur
+                // hier, wo der Mensch am Browser selbst schreibt.
+                if let Some(url) = crate::apps::typed(&typed) {
+                    self.open_url(window, &url, flag("newTab"), true);
+                } else if let Some(url) = omnibox::resolve(&typed, engine) {
                     self.open_url(window, &url, flag("newTab"), true);
                 }
             }
@@ -175,6 +180,18 @@ impl App {
             "localSiteRemove" => {
                 self.forbid_local_site(&text("site"));
                 self.send_panel(window, "settings", "");
+            }
+            // Rechte je Website: eine Entscheidung zurücknehmen. Danach gilt für
+            // die Website wieder das Übliche – Zunder fragt beim nächsten Mal.
+            "rightRemove" => {
+                let (site, kind) = (text("site"), text("kind"));
+                match kind.as_str() {
+                    "camera" | "mic" => self.media_forget(&site, &kind),
+                    "localnet" => self.forbid_local_site(&site),
+                    "blocker" => self.set_site_blocker(&site, false, false),
+                    _ => {}
+                }
+                self.send_panel(window, "rights", &text("q"));
             }
             // Website-Daten: für eine Website löschen – oder für alle (ohne Namen).
             "siteDataDelete" => {
@@ -298,6 +315,9 @@ impl App {
                         NoticeAction::OpenTab(url) => {
                             self.new_tab(window, Some(url), true, None);
                         }
+                        NoticeAction::AppLocation(tab_window, tab, app, n) => {
+                            self.app_location_allowed(tab_window, tab, app, n);
+                        }
                         NoticeAction::BlockerOff(tab_window, tab, site) => {
                             let private = self.windows.get(&tab_window).is_some_and(|w| w.private);
                             self.set_site_blocker(&site, true, private);
@@ -330,8 +350,28 @@ impl App {
                 }
             }
             "noticeGone" => {
-                self.notices.remove(&(number("id") as u64));
-                self.notice_owners.remove(&(number("id") as u64));
+                let gone = number("id") as u64;
+                // Stand dort noch die Frage einer App nach dem Standort, ist sie
+                // damit unbeantwortet geblieben.
+                if let Some(NoticeAction::AppLocation(tab_window, tab, app, n)) = self.notices.remove(&gone) {
+                    self.app_location_unanswered(tab_window, tab, app, n);
+                }
+                self.notice_owners.remove(&gone);
+                // Der Hinweis auf ein nicht geladenes PDF war kaum zu sehen, weil
+                // ihn gleich ein anderer verdrängt hat – oder er kam in der
+                // Warteschlange gar nicht dran: Dann kommt er beim nächsten Mal
+                // wieder. Schließt ihn der Mensch selbst oder läuft er ab, bleibt
+                // es bei „gezeigt“.
+                if let Some((known, since)) = self.frame_file_notices.remove(&gone) {
+                    let unseen = match text("why").as_str() {
+                        "dropped" => true,
+                        "replaced" => since.elapsed() < std::time::Duration::from_millis(2500),
+                        _ => false,
+                    };
+                    if unseen {
+                        self.frame_files_noticed.remove(&known);
+                    }
+                }
             }
             // Der Seitencheck wird geöffnet: die Seite noch einmal frisch ansehen.
             "checkRefresh" => {
@@ -461,7 +501,7 @@ impl App {
                 let needs_window = matches!(
                     id,
                     "new_tab" | "open_location" | "history" | "bookmarks" | "downloads" | "settings" | "reopen_tab" | "passwords"
-                );
+                ) || id.strip_prefix("app_").is_some_and(|app| crate::apps::by_id(app).is_some());
                 if !needs_window {
                     return;
                 }
@@ -480,6 +520,11 @@ impl App {
         match id {
             "new_tab" => {
                 self.new_tab(window, None, true, None);
+            }
+            // Eine eingebaute App in einem neuen Tab.
+            id if id.strip_prefix("app_").is_some_and(|app| crate::apps::by_id(app).is_some()) => {
+                let url = crate::apps::url_of(&id[4..]);
+                self.new_tab(window, Some(url), true, None);
             }
             "open_location" => self.focus_address(window),
             "close_tab" => self.close_tab(window, active),
@@ -509,6 +554,9 @@ impl App {
             "back" | "forward" => {
                 if let Some(win) = self.windows.get_mut(&window) {
                     if let Some(webview) = win.active_webview() {
+                        // Wer selbst blättert, hat Geduld für neue Fragen nach
+                        // Kamera und Mikrofon.
+                        native::media_user_moved(native::key(webview));
                         let _ = if id == "back" {
                             webview.go_back()
                         } else {
@@ -679,6 +727,8 @@ impl App {
             return;
         }
         if let Some(webview) = &tab.webview {
+            // Wer selbst neu lädt, darf wieder nach Kamera und Mikrofon gefragt werden.
+            native::media_visit_over(native::key(webview));
             if ignore_cache {
                 native::reload_from_origin(webview);
             } else {
@@ -980,6 +1030,35 @@ impl App {
                     .collect();
                 json!({ "items": items })
             }
+            // Was Websites dürfen oder nicht dürfen – alles, was sich Zunder je
+            // Website gemerkt hat, an einer Stelle.
+            "rights" => {
+                let mut sites: std::collections::BTreeMap<String, Vec<Value>> = std::collections::BTreeMap::new();
+                for (site, rule) in &self.media_sites {
+                    let rights = sites.entry(site.clone()).or_default();
+                    if let Some(allowed) = rule.camera {
+                        rights.push(json!({ "kind": "camera", "allowed": allowed }));
+                    }
+                    if let Some(allowed) = rule.microphone {
+                        rights.push(json!({ "kind": "mic", "allowed": allowed }));
+                    }
+                }
+                for site in &self.local_sites {
+                    sites.entry(site.clone()).or_default().push(json!({ "kind": "localnet", "allowed": true }));
+                }
+                for site in &self.blocker_off {
+                    sites.entry(site.clone()).or_default().push(json!({ "kind": "blocker", "allowed": true }));
+                }
+                let total = sites.len();
+                let needle = query.trim().to_lowercase();
+                let items: Vec<Value> = sites
+                    .into_iter()
+                    .filter(|(site, rights)| !rights.is_empty() && (needle.is_empty() || site.contains(&needle)))
+                    .take(800)
+                    .map(|(site, rights)| json!({ "site": site, "rights": rights }))
+                    .collect();
+                json!({ "items": items, "total": total })
+            }
             "settings" => json!({
                 "engine": self.settings.engine,
                 "suggest": self.settings.suggest,
@@ -997,8 +1076,10 @@ impl App {
                 "lookalike": self.settings.lookalike,
                 "localNet": self.settings.local_net,
                 "localSites": self.local_sites,
+                "rightsCount": self.rights_count(),
                 "devtools": self.settings.devtools,
                 "splash": self.settings.splash,
+                "startBookmarks": self.settings.start_bookmarks,
                 "clearOnQuit": self.settings.clear_on_quit,
                 "wallpaper": self.store.setting("wallpaper").unwrap_or_default(),
                 "wallpapers": crate::wallpapers::list(),
@@ -1093,6 +1174,13 @@ impl App {
             "splash" => {
                 self.settings.splash = on;
                 store_flag(&self.store, key);
+            }
+            // Lesezeichen als Kacheln auf der Startseite – oder nicht.
+            "start_bookmarks" => {
+                self.settings.start_bookmarks = on;
+                store_flag(&self.store, key);
+                self.refresh_newtab();
+                self.reload_start_pages();
             }
             "restore" => {
                 self.settings.restore = on;

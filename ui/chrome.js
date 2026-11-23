@@ -1271,6 +1271,7 @@
     settings: S.p_settings,
     passwords: S.p_passwords,
     sitedata: S.p_sitedata,
+    rights: S.p_rights,
   };
 
   function togglePanel(name) {
@@ -1287,7 +1288,8 @@
     ui.lastPanel = null;
     ui.panelOptions = options || {};
     $('panel-title').textContent = PANEL_TITLE[name] || '';
-    const searchable = name === 'history' || name === 'bookmarks' || name === 'passwords' || name === 'sitedata';
+    const searchable =
+      name === 'history' || name === 'bookmarks' || name === 'passwords' || name === 'sitedata' || name === 'rights';
     $('panel-search').hidden = !searchable;
     const query = $('panel-query');
     query.value = '';
@@ -1296,7 +1298,7 @@
         ? S.p_search_history
         : name === 'passwords'
           ? S.p_search_passwords
-          : name === 'sitedata'
+          : name === 'sitedata' || name === 'rights'
             ? S.p_search_sitedata
             : S.p_search_bookmarks;
     const extra = $('panel-extra');
@@ -1423,6 +1425,42 @@
         const tools = el('div', 'setbtns');
         tools.appendChild(textButton(S.sd_delete_all.replace('{n}', String(data.total || items.length)), 'danger', () => post({ c: 'siteDataDelete', site: '', q: '' })));
         body.appendChild(tools);
+      }
+    } else if (message.name === 'rights') {
+      // Welche Website was darf – jede Entscheidung einzeln zurückzunehmen.
+      body.appendChild(el('div', 'setnote', S.rt_note));
+      if (!items.length) body.appendChild(el('div', 'empty', ui.panelQuery ? S.p_no_results : S.rt_empty));
+      const RIGHT = {
+        camera: ['camera', S.rt_camera_yes, S.rt_camera_no],
+        mic: ['microphone', S.rt_mic_yes, S.rt_mic_no],
+        localnet: ['globe', S.rt_localnet, S.rt_localnet],
+        blocker: ['shield', S.rt_blocker, S.rt_blocker],
+      };
+      for (const item of items) {
+        const row = el('div', 'row rights');
+        row.appendChild(icon('globe'));
+        const text = el('div', 'txt');
+        text.appendChild(el('div', 't', item.site));
+        const chips = el('div', 'rchips');
+        for (const right of item.rights || []) {
+          const known = RIGHT[right.kind];
+          if (!known) continue;
+          const chip = el('span', 'chip' + (right.allowed ? '' : ' no'));
+          chip.appendChild(icon(known[0], 'sm'));
+          chip.appendChild(el('span', '', right.allowed ? known[1] : known[2]));
+          const remove = el('button', '');
+          remove.type = 'button';
+          remove.title = S.rt_remove;
+          remove.textContent = '×';
+          remove.addEventListener('click', () =>
+            post({ c: 'rightRemove', site: item.site, kind: right.kind, q: ui.panelQuery || '' })
+          );
+          chip.appendChild(remove);
+          chips.appendChild(chip);
+        }
+        text.appendChild(chips);
+        row.appendChild(text);
+        body.appendChild(row);
       }
     } else if (message.name === 'history') {
       if (!items.length) body.appendChild(el('div', 'empty', ui.panelQuery ? S.p_no_results : S.p_empty_history));
@@ -1870,10 +1908,23 @@
       row.appendChild(textButton(S.s_sitedata_open, '', () => openPanel('sitedata')));
       body.appendChild(row);
     }
+    {
+      // Was Websites dürfen: Kamera, Mikrofon, eigenes Netz, Werbeblocker aus.
+      const count = data.rightsCount || 0;
+      const state = !count ? S.s_rights_none : count === 1 ? S.s_rights_one : S.s_rights_count.replace('{n}', String(count));
+      const row = el('div', 'set');
+      const text = el('div', 'txt');
+      text.appendChild(el('div', '', S.s_rights));
+      text.appendChild(el('div', 'h', S.s_rights_hint + ' ' + state));
+      row.appendChild(text);
+      row.appendChild(textButton(S.s_sitedata_open, '', () => openPanel('rights')));
+      body.appendChild(row);
+    }
     body.appendChild(el('div', 'setnote', S.s_always));
 
+    body.appendChild(el('div', 'sethead', S.s_head_start));
+    body.appendChild(switchRow(S.s_start_bookmarks, S.s_start_bookmarks_hint, 'start_bookmarks', data.startBookmarks));
     if ((data.wallpapers || []).length) {
-      body.appendChild(el('div', 'sethead', S.s_head_start));
       const entries = [{ id: '', name: S.wp_none }].concat(data.wallpapers);
       body.appendChild(selectRow(S.s_wallpaper, S.s_wallpaper_hint, 'wallpaper', entries, data.wallpaper || ''));
     }
@@ -2355,7 +2406,7 @@
         let drop = waitingNotices.findIndex((waiting) => !waiting.warn);
         if (drop < 0) drop = waitingNotices.findIndex((waiting) => !waiting.keep);
         if (drop < 0) drop = waitingNotices.length - 1;
-        post({ c: 'noticeGone', id: waitingNotices.splice(drop, 1)[0].id });
+        post({ c: 'noticeGone', id: waitingNotices.splice(drop, 1)[0].id, why: 'dropped' });
       }
       // Eine wartende Warnung kommt dran, sobald die erste lange genug stand.
       if (message.warn && age < NOTICE_HOLD) {
@@ -2368,7 +2419,9 @@
   }
 
   function displayNotice(message) {
-    if (ui.noticeId != null) post({ c: 'noticeGone', id: ui.noticeId });
+    // „replaced“: Ein neuer Hinweis verdrängt den alten – anders als beim
+    // Schließen oder Ablaufen hat ihn dann womöglich niemand gelesen.
+    if (ui.noticeId != null) post({ c: 'noticeGone', id: ui.noticeId, why: 'replaced' });
     clearTimeout(ui.noticeTimer);
     ui.noticeId = message.id;
     ui.noticeWarn = !!message.warn;

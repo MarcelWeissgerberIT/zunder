@@ -258,6 +258,10 @@ pub fn bar_url(url: &str) -> String {
 
 /// Kurzform für die Anzeige, solange die Adressleiste nicht bearbeitet wird.
 pub fn pretty_url(url: &str) -> String {
+    // Eine eingebaute App steht mit ihrem Namen da.
+    if let Some(app) = crate::apps::by_url(url) {
+        return crate::i18n::t(app.name).to_string();
+    }
     let full = bar_url(url);
     let rest = full
         .strip_prefix("https://")

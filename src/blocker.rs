@@ -311,7 +311,8 @@ struct Ads {
     /// Gemeldete Betrugs- und Schadseiten – unabhängig vom Werbeblocker.
     guard: Layer,
     guard_enabled: bool,
-    /// Rechner, die jemand in dieser Sitzung ausdrücklich trotzdem öffnen wollte.
+    /// Einträge der Listen, die jemand in dieser Sitzung ausdrücklich übergangen
+    /// hat (`h:<rechner>` oder `p:<rechner><pfad>`, siehe `GuardIndex::matched`).
     guard_off: HashSet<String>,
     /// Verzeichnis der gemeldeten Adressen – für die Warnung, bevor ein Tab
     /// eine solche Seite überhaupt öffnet (`guard_hit`).
@@ -400,10 +401,16 @@ unsafe fn sync_tab(ads: &mut Ads, key: usize, controller: *mut AnyObject, url: &
     let state = settle_layer(&ads.layer, controller, current, want, may_detach);
     ads.tabs.entry(key).or_default().attached = state;
     // Gemeldete Betrugs- und Schadseiten: Diese Listen hängen auch dort, wo
-    // der Werbeblocker für die Website abgeschaltet ist. Ausgenommen sind nur
-    // Rechner, die jemand in dieser Sitzung ausdrücklich trotzdem öffnen wollte.
-    let host = guard_key(url);
-    let want = (ads.guard_enabled || forced) && !ads.guard_off.contains(&host) && !internal;
+    // der Werbeblocker für die Website abgeschaltet ist. Ausgenommen ist nur
+    // eine Seite, deren Eintrag jemand in dieser Sitzung ausdrücklich übergangen
+    // hat – WebKit sperrte sie sonst trotzdem. Auf den übrigen Seiten desselben
+    // Rechners hängen die Listen weiter.
+    let exempt = ads
+        .guard_index
+        .as_ref()
+        .and_then(|index| index.matched(url))
+        .is_some_and(|entry| ads.guard_off.contains(&entry));
+    let want = (ads.guard_enabled || forced) && !exempt && !internal;
     let current = ads.tabs.get(&key).and_then(|tab| tab.guarded);
     let state = settle_layer(&ads.guard, controller, current, want, may_detach);
     ads.tabs.entry(key).or_default().guarded = state;
@@ -467,28 +474,29 @@ pub fn guard_hit(key: usize, url: &str) -> bool {
         let Some(index) = ads.guard_index.as_ref() else {
             return false;
         };
-        index.matches(url) && !ads.guard_off.contains(&guard_key(url))
+        index.matched(url).is_some_and(|entry| !ads.guard_off.contains(&entry))
     })
 }
 
-/// Der Rechner einer Adresse, wie ihn die Ausnahmen der Sitzung führen – ohne
-/// den Punkt, der hinter jedem Namen stehen darf.
-fn guard_key(url: &str) -> String {
-    crate::shield::host_of(url).trim_end_matches('.').to_string()
-}
-
-/// Diesen Rechner in dieser Sitzung trotz Warnung öffnen (von der Rückfrage-Seite).
-pub fn guard_allow(host: &str) {
-    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    let plausible = !host.is_empty() && host.len() <= 253 && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']'));
-    if plausible {
-        ADS.with(|ads| {
-            let mut ads = ads.borrow_mut();
-            if ads.guard_off.len() < 500 {
-                ads.guard_off.insert(host);
-            }
-        });
+/// Diese Adresse in dieser Sitzung trotz Warnung öffnen (von der
+/// Rückfrage-Seite). Übergangen wird genau der Eintrag der Listen, der sie
+/// trifft: Ist der ganze Rechner gemeldet, gilt es für ihn – ist nur eine
+/// einzelne Adresse gemeldet (ein Formular auf einem großen Dienst), dann nur
+/// für sie. Vor allem anderen, was über denselben Rechner gemeldet ist, warnt
+/// Zunder weiter.
+pub fn guard_allow(url: &str) {
+    if url.len() > 4096 {
+        return;
     }
+    ADS.with(|ads| {
+        let mut ads = ads.borrow_mut();
+        let Some(entry) = ads.guard_index.as_ref().and_then(|index| index.matched(url)) else {
+            return;
+        };
+        if ads.guard_off.len() < 500 {
+            ads.guard_off.insert(entry);
+        }
+    });
 }
 
 /// Ein Tab bricht zu einer Adresse auf (aus `native::nav_policy`, bevor der

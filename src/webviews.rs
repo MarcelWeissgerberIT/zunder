@@ -113,13 +113,15 @@ pub fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
 }
 
 /// Schemata, die im Tab selbst geladen werden. Alles andere (mailto:, tel:, …)
-/// gehört einem anderen Programm.
+/// gehört einem anderen Programm. Zunders Adresse für PDFs in Rahmen gehört
+/// dazu, weil wry auch nach Rahmen fragt – als Seite lässt sie
+/// `native::nav_policy` schon vorher nicht durch.
 fn loads_in_tab(url: &str) -> bool {
     let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
     matches!(
         scheme.as_str(),
         "http" | "https" | "about" | "blob" | "data" | "file" | "zunder" | "javascript" | "applewebdata"
-    )
+    ) || scheme == crate::pdfs::SCHEME
 }
 
 /// In einem Bau mit Prüfhilfe landen Downloads mit `ZUNDER_DOWNLOAD_DIR` in
@@ -145,6 +147,25 @@ fn redirect_download(path: &mut PathBuf) {
     *path = target;
 }
 
+/// Gibt einem Download einen anderen Namen im selben Ordner – wie überall, ohne
+/// eine vorhandene Datei zu überschreiben.
+fn rename_download(path: &mut PathBuf, name: &str) {
+    let Some(folder) = path.parent().map(std::path::Path::to_path_buf) else {
+        return;
+    };
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+        _ => (name.to_string(), String::new()),
+    };
+    let mut target = folder.join(name);
+    let mut counter = 1;
+    while target.exists() {
+        target = folder.join(format!("{stem} ({counter}){extension}"));
+        counter += 1;
+    }
+    *path = target;
+}
+
 /// Liegt das Ziel eines Downloads dort, wo es hingehört?
 fn download_target_ok(path: &std::path::Path) -> bool {
     let folder = crate::dev::build_var_os("ZUNDER_DOWNLOAD_DIR")
@@ -160,9 +181,7 @@ pub fn build_chrome(shared: &Rc<Shared>, bounds: Rect) -> wry::Result<WebView> {
     let proxy = shared.proxy.clone();
     let window_id = shared.window_id;
     let ctx = shared.page_ctx(Role::Chrome);
-    native::expect_internal("zunder://ui/index.html");
-
-    WebViewBuilder::new()
+    let built = WebViewBuilder::new()
         .with_bounds(bounds)
         .with_transparent(true)
         // In privaten Fenstern lädt auch der Rahmen (Seiten-Icons) nichts dauerhaft.
@@ -184,10 +203,17 @@ pub fn build_chrome(shared: &Rc<Shared>, bounds: Rect) -> wry::Result<WebView> {
         })
         .with_navigation_handler(|url| url.starts_with("zunder://ui/"))
         .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+        // Zunders eigene Oberfläche nimmt nichts auf. (Ohne diese Zeile sagte wry
+        // zu Kamera und Mikrofon von sich aus Ja.)
+        .with_permission_handler(|_kind| PermissionResponse::Deny)
         .with_accept_first_mouse(true)
         .with_back_forward_navigation_gestures(false)
         .with_devtools(crate::dev::enabled())
-        .build_as_child(&*shared.window)
+        .build_as_child(&*shared.window)?;
+    // Die eigene Oberfläche lädt nur diese WebView: Die Anmeldung gilt genau
+    // ihr. WebKit fragt erst nach dieser Zeile, ob sie die Adresse laden darf.
+    native::expect_internal(native::key(&built), "zunder://ui/index.html");
+    Ok(built)
 }
 
 /// Die Seitenleiste des Assistenten. Wie der Rahmen zeigt sie nur eingebaute
@@ -197,9 +223,7 @@ pub fn build_assistant(shared: &Rc<Shared>, bounds: Rect) -> wry::Result<WebView
     let proxy = shared.proxy.clone();
     let window_id = shared.window_id;
     let ctx = shared.page_ctx(Role::Assistant);
-    native::expect_internal("zunder://ui/assistant.html");
-
-    WebViewBuilder::new()
+    let built = WebViewBuilder::new()
         .with_bounds(bounds)
         // Durchsichtig, bis die Oberfläche geladen ist – so blitzt im dunklen
         // Modus keine weiße Fläche auf.
@@ -221,10 +245,17 @@ pub fn build_assistant(shared: &Rc<Shared>, bounds: Rect) -> wry::Result<WebView
         })
         .with_navigation_handler(|url| url.starts_with("zunder://ui/"))
         .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+        // Zunders eigene Oberfläche nimmt nichts auf. (Ohne diese Zeile sagte wry
+        // zu Kamera und Mikrofon von sich aus Ja.)
+        .with_permission_handler(|_kind| PermissionResponse::Deny)
         .with_accept_first_mouse(true)
         .with_back_forward_navigation_gestures(false)
         .with_devtools(crate::dev::enabled())
-        .build_as_child(&*shared.window)
+        .build_as_child(&*shared.window)?;
+    // Die eigene Oberfläche lädt nur diese WebView: Die Anmeldung gilt genau
+    // ihr. WebKit fragt erst nach dieser Zeile, ob sie die Adresse laden darf.
+    native::expect_internal(native::key(&built), "zunder://ui/assistant.html");
+    Ok(built)
 }
 
 /// Die Sprechblase des Passwort-Tresors: ein kleines Stück eigener Oberfläche,
@@ -235,9 +266,7 @@ pub fn build_bubble(shared: &Rc<Shared>, bounds: Rect) -> wry::Result<WebView> {
     let proxy = shared.proxy.clone();
     let window_id = shared.window_id;
     let ctx = shared.page_ctx(Role::Bubble);
-    native::expect_internal("zunder://ui/bubble.html");
-
-    WebViewBuilder::new()
+    let built = WebViewBuilder::new()
         .with_bounds(bounds)
         .with_visible(false)
         .with_transparent(true)
@@ -258,10 +287,17 @@ pub fn build_bubble(shared: &Rc<Shared>, bounds: Rect) -> wry::Result<WebView> {
         })
         .with_navigation_handler(|url| url.starts_with("zunder://ui/"))
         .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+        // Zunders eigene Oberfläche nimmt nichts auf. (Ohne diese Zeile sagte wry
+        // zu Kamera und Mikrofon von sich aus Ja.)
+        .with_permission_handler(|_kind| PermissionResponse::Deny)
         .with_accept_first_mouse(true)
         .with_back_forward_navigation_gestures(false)
         .with_devtools(crate::dev::enabled())
-        .build_as_child(&*shared.window)
+        .build_as_child(&*shared.window)?;
+    // Die eigene Oberfläche lädt nur diese WebView: Die Anmeldung gilt genau
+    // ihr. WebKit fragt erst nach dieser Zeile, ob sie die Adresse laden darf.
+    native::expect_internal(native::key(&built), "zunder://ui/bubble.html");
+    Ok(built)
 }
 
 /// Eine WebView für den Inhalt eines Tabs. `config` ist nur bei Pop-ups
@@ -300,6 +336,11 @@ pub fn build_content(
     };
     let ctx = shared.page_ctx(Role::Content);
 
+    // Schlüssel der WebView – bekannt erst, wenn sie gebaut ist.
+    let view_key = Rc::new(std::cell::Cell::new(0usize));
+    let committed_key = view_key.clone();
+    let download_key = view_key.clone();
+
     let on_title = send.clone();
     let on_load = send.clone();
     let on_nav = send.clone();
@@ -319,6 +360,11 @@ pub fn build_content(
         .with_initialization_script(INJECT_JS)
         .with_document_title_changed_handler(move |title| on_title(PageEvent::Title(title)))
         .with_on_page_load_handler(move |event, url| {
+            if matches!(event, PageLoadEvent::Started) {
+                // Die neue Seite steht: Was die alte für ihre PDF-Rahmen
+                // abgelegt hat, gibt der Browser ab jetzt nicht mehr heraus.
+                native::pdfs_page_left(committed_key.get());
+            }
             on_load(match event {
                 PageLoadEvent::Started => PageEvent::Committed(url),
                 PageLoadEvent::Finished => PageEvent::Finished(url),
@@ -360,6 +406,13 @@ pub fn build_content(
             }
         })
         .with_download_started_handler(move |url, path| {
+            // Eine eingebaute App sichert eine Datei, die sie selbst erzeugt
+            // hat: Sie heißt so, wie die App es angekündigt hat.
+            if crate::apps::own_file(&url).is_some() {
+                if let Some(name) = native::take_file_name(download_key.get()) {
+                    rename_download(path, &name);
+                }
+            }
             redirect_download(path);
             // Eine Datei landet immer unmittelbar im Download-Ordner, nie als
             // versteckte Datei – gleich, welchen Namen die Seite vorschlägt. Und
@@ -377,7 +430,11 @@ pub fn build_content(
         .with_download_completed_handler(move |url, _path, ok| {
             on_download_done(PageEvent::DownloadFinished { url, ok })
         })
-        // Kamera und Mikrofon: WebKit fragt je Seite nach, nichts wird still erlaubt.
+        // Kamera und Mikrofon: Die Frage stellt Zunder selbst (`native.rs`,
+        // `media.rs`) – mit dem Namen der Website und der Möglichkeit, sich die
+        // Antwort zu merken. Dies hier bleibt als Rückfall: Griffe Zunders
+        // eigene Abfrage einmal nicht, fragt WebKit je Seite – still erlaubt
+        // wird nichts.
         .with_permission_handler(|_kind| PermissionResponse::Default)
         .with_on_web_content_process_terminate_handler(move || on_crash(PageEvent::Crashed))
         .with_back_forward_navigation_gestures(true)
@@ -396,6 +453,11 @@ pub fn build_content(
         builder = builder.with_url(url);
     }
     let webview = builder.build_as_child(&*shared.window)?;
+    view_key.set(native::key(&webview));
+    native::stay_visible(&webview);
+    // Private Fenster merken sich nichts – auch keine Antwort auf die Frage
+    // nach Kamera und Mikrofon.
+    native::media_new_view(native::key(&webview), shared.private || shared.stealth);
     if shared.stealth {
         // Noch bevor der erste Abruf entschieden wird: Für diesen Tab gelten
         // alle Schutzschalter und der Blocker, gleich was sonst eingestellt ist.

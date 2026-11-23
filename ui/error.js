@@ -144,9 +144,11 @@
       open.textContent = S.e_guard_open.replace('{host}', host);
       open.hidden = false;
       open.addEventListener('click', () => {
-        // Gilt für diesen Rechner, bis Zunder beendet wird – und wird nur von
-        // dieser Seite angenommen.
-        tell('g:' + target.hostname);
+        // Gilt für genau das, was gemeldet ist – den Rechner oder nur diese eine
+        // Adresse –, bis Zunder beendet wird. Angenommen wird es nur von dieser Seite.
+        // (Gekürzt: Für den Abgleich mit den Listen genügt der Anfang, und sehr
+        // lange Nachrichten nimmt der Browser nicht an.)
+        tell('g:' + target.href.slice(0, 3000));
         location.replace(target.href);
       });
     }

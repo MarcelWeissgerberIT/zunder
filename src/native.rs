@@ -63,6 +63,10 @@ pub enum NavKind {
     /// Die Adresse steht auf der Liste gemeldeter Betrugs- und Schadseiten.
     /// `in_place`: Der Tab selbst wollte dorthin – sonst ein neues Fenster.
     Guard { url: String, in_place: bool },
+    /// WebKit wollte den Inhalt eines eingebetteten Rahmens von sich aus als
+    /// Datei herunterladen (mit der Härtung und im Stealth-Fenster: PDFs);
+    /// Zunder hat den Download abgesagt.
+    FrameFile { pdf: bool },
 }
 
 #[derive(Debug)]
@@ -88,7 +92,10 @@ thread_local! {
     /// Rechner, die in dieser Sitzung ausdrücklich unverschlüsselt geladen werden dürfen.
     static HTTP_ALLOWED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Interne Seiten (`zunder://…`), die der Browser gleich selbst lädt.
-    static INTERNAL: RefCell<Vec<(String, Instant)>> = const { RefCell::new(Vec::new()) };
+    static INTERNAL: RefCell<Vec<(usize, String, Instant)>> = const { RefCell::new(Vec::new()) };
+    /// Dateinamen, die eine eingebaute App für die Datei angekündigt hat, die
+    /// sie gleich sichert: (WebView, Name, seit wann).
+    static FILE_NAMES: RefCell<Vec<(usize, String, Instant)>> = const { RefCell::new(Vec::new()) };
     /// Geräte im eigenen Netz, die der Mensch am Browser gerade selbst aufruft:
     /// (Rechner, WebView oder jede, seit wann).
     static USER_LOCAL: RefCell<Vec<(String, Option<usize>, Instant)>> = const { RefCell::new(Vec::new()) };
@@ -104,6 +111,8 @@ thread_local! {
 /// So lange gilt die Anmeldung einer internen Seite bzw. eines selbst
 /// aufgerufenen Geräts – reichlich für den Weg bis zur Navigationsentscheidung.
 const EXPECT_WINDOW: Duration = Duration::from_secs(20);
+/// So lange gilt der Name, den eine App für ihre Datei angekündigt hat.
+const FILE_NAME_WINDOW: Duration = Duration::from_secs(15);
 
 #[derive(Default)]
 struct DialogState {
@@ -175,6 +184,10 @@ fn unrouted(key: usize) -> bool {
 pub fn keep_stealth(live: &HashSet<usize>) {
     UNROUTED.with(|set| set.borrow_mut().retain(|key| live.contains(key)));
     STEALTH.with(|tabs| tabs.borrow_mut().retain(|key| live.contains(key)));
+    PRIVATE_VIEWS.with(|set| set.borrow_mut().retain(|key| live.contains(key)));
+    MEDIA_REFUSED.with(|refused| refused.borrow_mut().retain(|key, _| live.contains(key)));
+    PDF_SHELF.with(|shelf| shelf.borrow_mut().keep(live));
+    FRAME_CLICKS.with(|clicks| clicks.borrow_mut().keep(live));
 }
 
 /// Die Schutzschalter, wie sie für diese WebView gelten: In einem
@@ -273,40 +286,84 @@ pub fn allow_http(host: &str) {
     }
 }
 
-/// Meldet eine interne Seite an, die der Browser gleich selbst lädt. Nur
-/// angemeldete Adressen kommen durch die Navigationsentscheidung – eine
-/// Website kann einen Tab deshalb nie auf eine interne Seite schicken.
-pub fn expect_internal(url: &str) {
-    let Ok(parsed) = url::Url::parse(url) else {
-        return;
-    };
-    if parsed.scheme() != "zunder" {
-        return;
-    }
-    INTERNAL.with(|list| {
-        let mut list = list.borrow_mut();
-        list.retain(|(_, at)| at.elapsed() < EXPECT_WINDOW);
-        list.push((parsed.to_string(), Instant::now()));
-    });
+/// Meldet eine interne Seite an, die der Browser gleich selbst in dieser
+/// WebView lädt. Nur angemeldete Adressen kommen durch die
+/// Navigationsentscheidung – eine Website kann einen Tab deshalb nie auf eine
+/// interne Seite schicken. Die Anmeldung gilt genau der einen WebView: Eine
+/// Seite in einem anderen Tab, die es im selben Augenblick mit derselben
+/// Adresse versucht, kann sie nicht für sich verbrauchen.
+pub fn expect_internal(webview: usize, url: &str) {
+    // Auch eine Adresse im Netz zählt: Mit ihr ist eine ältere Anmeldung dieser
+    // WebView überholt.
+    let wanted = internal_address(url);
+    INTERNAL.with(|list| expect_in(&mut list.borrow_mut(), webview, wanted, Instant::now()));
 }
 
-/// Wurde genau diese interne Adresse angemeldet? Die Anmeldung gilt einmal.
-fn internal_expected(url: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(url) else {
+/// Wurde genau diese interne Adresse für diese WebView angemeldet? Die
+/// Anmeldung gilt einmal.
+fn internal_expected(webview: usize, url: &str) -> bool {
+    let Some(wanted) = internal_address(url) else {
         return false;
     };
-    let wanted = parsed.to_string();
-    INTERNAL.with(|list| {
-        let mut list = list.borrow_mut();
-        list.retain(|(_, at)| at.elapsed() < EXPECT_WINDOW);
-        match list.iter().position(|(expected, _)| *expected == wanted) {
-            Some(position) => {
-                list.remove(position);
-                true
-            }
-            None => false,
+    INTERNAL.with(|list| expected_in(&mut list.borrow_mut(), webview, &wanted, Instant::now()))
+}
+
+fn internal_address(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    (parsed.scheme() == "zunder").then(|| parsed.to_string())
+}
+
+/// Eine WebView lädt eines nach dem anderen: Was der Browser als Nächstes in
+/// ihr lädt (`wanted`: eine interne Seite, sonst nichts), löst ihre ältere
+/// Anmeldung ab – übrig bleibt nie eine, die später eine Seite einlösen könnte.
+fn expect_in(list: &mut Vec<(usize, String, Instant)>, webview: usize, wanted: Option<String>, now: Instant) {
+    list.retain(|(view, _, at)| *view != webview && now.saturating_duration_since(*at) < EXPECT_WINDOW);
+    if let Some(wanted) = wanted {
+        list.push((webview, wanted, now));
+    }
+}
+
+fn expected_in(list: &mut Vec<(usize, String, Instant)>, webview: usize, wanted: &str, now: Instant) -> bool {
+    list.retain(|(_, _, at)| now.saturating_duration_since(*at) < EXPECT_WINDOW);
+    match list.iter().position(|(view, expected, _)| *view == webview && expected == wanted) {
+        Some(position) => {
+            list.remove(position);
+            true
         }
-    })
+        None => false,
+    }
+}
+
+/// Eine eingebaute App sichert gleich eine Datei, die sie selbst erzeugt hat,
+/// und kündigt an, wie sie heißen soll. In der Sandbox kennt WebKit den Namen
+/// aus dem Link nicht (dort stößt der Browser den Download selbst an) – ohne
+/// diese Ankündigung hieße die Datei „Unknown“.
+pub fn expect_file_name(webview: usize, name: String) {
+    FILE_NAMES.with(|list| name_in(&mut list.borrow_mut(), webview, name, Instant::now()));
+}
+
+/// Der angekündigte Name für die Datei, die diese WebView gerade sichert –
+/// einmal, und nur kurz nach der Ankündigung.
+pub fn take_file_name(webview: usize) -> Option<String> {
+    FILE_NAMES.with(|list| name_out(&mut list.borrow_mut(), webview, Instant::now()))
+}
+
+/// Zwei Dateien kurz nacheinander (ein Doppelklick) bekommen ihre Namen in
+/// der Reihenfolge der Ankündigung. Mehr als vier warten je WebView nicht.
+fn name_in(list: &mut Vec<(usize, String, Instant)>, webview: usize, name: String, now: Instant) {
+    list.retain(|(_, _, at)| now.saturating_duration_since(*at) < FILE_NAME_WINDOW);
+    while list.iter().filter(|(view, _, _)| *view == webview).count() >= 4 {
+        if let Some(oldest) = list.iter().position(|(view, _, _)| *view == webview) {
+            list.remove(oldest);
+        }
+    }
+    list.push((webview, name, now));
+}
+
+fn name_out(list: &mut Vec<(usize, String, Instant)>, webview: usize, now: Instant) -> Option<String> {
+    list.retain(|(_, _, at)| now.saturating_duration_since(*at) < FILE_NAME_WINDOW);
+    let position = list.iter().position(|(view, _, _)| *view == webview)?;
+    Some(list.remove(position).1)
 }
 
 /// Der Mensch am Browser ruft diese Adresse gerade selbst auf (Eingabe,
@@ -314,6 +371,10 @@ fn internal_expected(url: &str) -> bool {
 /// sie nicht. `webview`: nur in dieser WebView – oder in jeder, wenn es sie
 /// noch nicht gibt.
 pub fn user_navigation(webview: Option<usize>, url: &str) {
+    if let Some(webview) = webview {
+        // Wer selbst eine Adresse aufruft, beginnt einen neuen Besuch.
+        media_visit_over(webview);
+    }
     let host = crate::shield::host_of(url);
     if host.is_empty() {
         return;
@@ -408,6 +469,11 @@ fn emit(event: UserEvent) {
             let _ = proxy.send_event(event);
         }
     });
+}
+
+/// Ein Ereignis an die App – für die Nachbarn dieser Datei (`geo.rs`).
+pub fn post(event: UserEvent) {
+    emit(event);
 }
 
 pub fn mtm() -> MainThreadMarker {
@@ -555,6 +621,15 @@ pub fn content_config(
         // Ton nur nach einer Nutzeraktion (WKAudiovisualMediaTypeAudio = 1).
         let _: () = msg_send![&*config, setMediaTypesRequiringUserActionForPlayback: 1usize];
         let prefs = config.preferences();
+        // Prüfhilfe: gestellte Kamera und gestelltes Mikrofon. So lässt sich die
+        // Abfrage prüfen, ohne dass macOS nach den echten Geräten fragt – und
+        // ohne dass im Probelauf je etwas aufgenommen wird.
+        if crate::dev::var_os("ZUNDER_MOCK_MEDIA").is_some() {
+            let known: bool = msg_send![&*prefs, respondsToSelector: sel!(_setMockCaptureDevicesEnabled:)];
+            if known {
+                let _: () = msg_send![&*prefs, _setMockCaptureDevicesEnabled: true];
+            }
+        }
         // Pop-ups nur nach einem Klick, nicht ungefragt.
         let _: () = msg_send![&*prefs, setJavaScriptCanOpenWindowsAutomatically: false];
         let guards = guards();
@@ -594,6 +669,13 @@ pub fn content_config(
         }
         // Zunders eigenes Skript (Passwort-Tresor) samt seinem Nachrichtenkanal.
         attach_bridge(&config);
+        // Und die Hilfe für PDF-Rahmen, die WebKit leer lässt. Im gehärteten
+        // Modus und im Stealth-Fenster bleibt sie weg: Dort zeigt WebKit
+        // eingebettete PDFs ohnehin nicht an – und je weniger Zunder in eine
+        // Seite hineinreicht, desto weniger gibt es an ihm zu erkennen.
+        if !(guards.hardened || stealth) {
+            attach_pdfs(&config);
+        }
         if stealth {
             attach_watch(&config);
         }
@@ -748,10 +830,51 @@ unsafe fn local_net_refused(action: Obj, webview: Obj, url: &str) -> Option<Stri
     }
 }
 
+/// Kommt diese Navigation von Zunders eigener Startseite – der Seite im Tab,
+/// nicht aus einem Rahmen?
+unsafe fn from_start_page(action: Obj) -> bool {
+    let frame: Obj = msg_send![action, sourceFrame];
+    if frame.is_null() {
+        return false;
+    }
+    let main: bool = msg_send![frame, isMainFrame];
+    let origin: Obj = msg_send![frame, securityOrigin];
+    if !main || origin.is_null() {
+        return false;
+    }
+    let protocol: Obj = msg_send![origin, protocol];
+    let host: Obj = msg_send![origin, host];
+    string_of(protocol).eq_ignore_ascii_case("zunder") && string_of(host).eq_ignore_ascii_case("newtab")
+}
+
 /// Antwortet hier ein Server mit einer Weiterleitung auf einen früheren Abruf?
 unsafe fn is_redirect(action: Obj) -> bool {
     let knows: bool = msg_send![action, respondsToSelector: sel!(_isRedirect)];
     knows && msg_send![action, _isRedirect]
+}
+
+/// Die Adresse, mit der ein Abruf begann, bevor ein Server ihn weitergeleitet
+/// hat – leer, wenn WebKit sie nicht nennt.
+unsafe fn original_url(action: Obj) -> String {
+    let knows: bool = msg_send![action, respondsToSelector: sel!(_originalURL)];
+    if !knows {
+        return String::new();
+    }
+    let address: Obj = msg_send![action, _originalURL];
+    let text: Obj = if address.is_null() { std::ptr::null_mut() } else { msg_send![address, absoluteString] };
+    string_of(text)
+}
+
+/// Bleibt diese Navigation im Dokument, das der Rahmen schon zeigt – wechselt
+/// also nur der Anker? Dann folgt keine Antwort eines Servers.
+unsafe fn same_document(frame: Obj, url: &str) -> bool {
+    if frame.is_null() || !url.contains('#') {
+        return false;
+    }
+    let request: Obj = msg_send![frame, request];
+    let address: Obj = if request.is_null() { std::ptr::null_mut() } else { msg_send![request, URL] };
+    let text: Obj = if address.is_null() { std::ptr::null_mut() } else { msg_send![address, absoluteString] };
+    !text.is_null() && without_fragment(&string_of(text)) == without_fragment(url)
 }
 
 /// Führt diese Adresse wirklich zu einem Eintrag im Verlauf des Tabs? Beim
@@ -847,6 +970,11 @@ extern "C-unwind" fn nav_policy(
 ) {
     const CANCEL: isize = 0; // WKNavigationActionPolicyCancel
     unsafe {
+        // Ein echter Klick, der einen eingebetteten Rahmen woandershin führt
+        // (Adresse; bei einer Weiterleitung dazu der Anfang der Kette). Vermerkt
+        // wird er erst ganz unten – wenn feststeht, dass die Navigation
+        // stattfindet und eine Antwort des Servers folgt.
+        let mut frame_click: Option<(String, Option<String>)> = None;
         if !action.is_null() {
             // WKNavigationType: 0 Link, 1 Formular, 2 Vor/Zurück, 3 Neu laden,
             // 4 Formular erneut, -1 alles andere.
@@ -875,11 +1003,51 @@ extern "C-unwind" fn nav_policy(
             let guards = guards_for(webview);
             let emit_nav = |kind: NavKind| emit(UserEvent::Nav(NavEvent { webview: webview as usize, kind }));
 
+            // Der Mensch klickt mit der Maus einen Link an oder schickt so ein
+            // Formular ab, und das führt einen eingebetteten Rahmen woandershin:
+            // Macht WebKit daraus einen Download, ist es seiner (siehe
+            // `nav_response_download`). Was ein Skript der Seite in einen Rahmen
+            // lädt, zählt nicht – so betten Seiten PDFs ein, auch auf einen Klick
+            // hin (WebKit meldet selbst dann noch „vom Menschen“, wenn die Seite
+            // nach dem Klick erst Daten abruft und den Rahmen später einhängt).
+            // Eine Maustaste nennt WebKit dagegen nur für den echten Mausklick:
+            // Klickt ein Skript den Link an oder schickt es das Formular ab,
+            // bleibt sie 0 – auch mitten in einem echten Klick anderswo (gemessen
+            // auf macOS 26). Weiterleitungen tragen Art, Klick und Taste weiter.
+            if !main && !new_window {
+                let button: isize = msg_send![action, buttonNumber];
+                // Ein Sprung innerhalb desselben Dokuments (nur der Anker
+                // wechselt) bringt keine Antwort – er braucht keinen Vermerk.
+                if crate::pdfs::frame_click(kind, clicked_by_user(action), button) && !same_document(frame, &url) {
+                    // Leitet ein Server weiter, wandert der Klick mit – wiedergefunden
+                    // an der Adresse, mit der dieser Abruf begann.
+                    let first = if is_redirect(action) { Some(original_url(action)) } else { None };
+                    frame_click = Some((url.clone(), first));
+                }
+            }
+
             // Interne Seiten: nie in einem Unterrahmen, nie in einem neuen
             // Fenster – und im Tab nur, wenn der Browser selbst sie lädt oder
             // man im Verlauf zu einer zurückkehrt.
             if lower.starts_with("zunder:") {
-                if !(main && sealed(&url) && (history || internal_expected(&url))) {
+                // Stealth-Tab ohne Tunnel: Es geht nichts hinaus – also lädt
+                // dort auch keine eingebaute App, die von sich aus Daten aus
+                // dem Netz holt (das sind keine Navigationen; hier käme es
+                // nicht mehr vorbei).
+                if crate::apps::by_url(&url).is_some() && unrouted(webview as usize) {
+                    decide.call((CANCEL,));
+                    return;
+                }
+                // Eine eingebaute App öffnet außer dem Browser selbst nur die
+                // Startseite – mit einem Klick auf ihre Kachel, und nur unter
+                // ihrer Adresse ohne jedes Anhängsel. Eine Webseite öffnet sie
+                // nie; auch die Weiterleitung eines Servers führt nicht hin.
+                // (Im Verlauf zu ihr zurückblättern kann ein Tab wie zu jeder
+                // früheren Seite – auch auf Geheiß der Seite, die er gerade
+                // zeigt. Die App spricht dann wie immer nur mit sich selbst.)
+                let from_start =
+                    main && kind == 0 && crate::apps::is_root(&url) && !is_redirect(action) && from_start_page(action);
+                if !(main && sealed(&url) && (history || internal_expected(webview as usize, &url) || from_start)) {
                     decide.call((CANCEL,));
                     return;
                 }
@@ -928,6 +1096,12 @@ extern "C-unwind" fn nav_policy(
                     }
                 }
                 if main {
+                    // Ein Klick des Menschen: Die Geduld des Tabs mit Fragen
+                    // nach Kamera und Mikrofon beginnt neu – auch wenn Zunder
+                    // die Navigation unten anhält und selbst neu aufsetzt.
+                    if clicked_by_user(action) {
+                        media_user_moved(webview as usize);
+                    }
                     if in_new_tab {
                         // Der neue Tab durchläuft diese Prüfungen dann selbst.
                         emit_nav(NavKind::OpenInTab { url, foreground: shift });
@@ -978,6 +1152,13 @@ extern "C-unwind" fn nav_policy(
                     let by_user = history || started_by_user(action, webview as usize, &url, kind);
                     crate::blocker::site_changed(webview, &url, kind == 3, by_user);
                 }
+            } else if has_scheme(&url, crate::pdfs::SCHEME) {
+                // Zunders Adresse für eingebettete PDFs (`pdfs.rs`): nur in einem
+                // Rahmen – nie als Seite im Tab, nie als neues Fenster.
+                if main || new_window {
+                    decide.call((CANCEL,));
+                    return;
+                }
             } else if !main && !new_window && !loads_in_frame(&lower) {
                 // Ein eingebetteter Rahmen (Werbung, Widget) startet kein anderes
                 // Programm – das darf nur die Seite selbst anstoßen.
@@ -1010,6 +1191,16 @@ extern "C-unwind" fn nav_policy(
                 let _: () = msg_send![webview, startDownloadUsingRequest: request, completionHandler: &*started];
                 decide.call((CANCEL,));
                 return;
+            }
+        }
+        if let Some((url, first)) = frame_click {
+            // Bis hierher hat nichts die Navigation angehalten. Ein Link mit
+            // „download“ wird ohne Antwort zum Download – auch er braucht
+            // keinen Vermerk.
+            let knows: bool = msg_send![action, respondsToSelector: sel!(shouldPerformDownload)];
+            let wanted: bool = knows && msg_send![action, shouldPerformDownload];
+            if !wanted {
+                FRAME_CLICKS.with(|clicks| clicks.borrow_mut().note(webview as usize, &url, first.as_deref(), Instant::now()));
             }
         }
         match ORIGINAL_POLICY.get() {
@@ -1057,6 +1248,15 @@ extern "C-unwind" fn nav_response(this: Obj, cmd: Sel, webview: Obj, response: O
                 if !shows || matches!(status, 204 | 205) {
                     crate::blocker::revert(webview);
                 }
+            } else if !inner.is_null() && !FRAME_CLICKS.with(|clicks| clicks.borrow().idle()) {
+                // Die Antwort für einen eingebetteten Rahmen ist da. Hat der Mensch
+                // sie mit einem Klick angefordert, deckt der Klick genau diese
+                // Antwort – und keine spätere auf dieselbe Adresse (siehe
+                // `nav_response_download`).
+                let address: Obj = msg_send![inner, URL];
+                let text: Obj = if address.is_null() { std::ptr::null_mut() } else { msg_send![address, absoluteString] };
+                let url = string_of(text);
+                FRAME_CLICKS.with(|clicks| clicks.borrow_mut().answer(webview as usize, &url, Instant::now()));
             }
             if http {
                 let url: Obj = msg_send![inner, URL];
@@ -1103,6 +1303,77 @@ extern "C-unwind" fn nav_response(this: Obj, cmd: Sel, webview: Obj, response: O
                 original(this, cmd, webview, response, decide);
             }
             None => decide.call((1,)), // WKNavigationResponsePolicyAllow
+        }
+    }
+}
+
+/// wrys Übernahme eines Downloads, der aus der Antwort eines Servers wurde –
+/// sie wird weiter aufgerufen, wenn der Download bleiben darf.
+static ORIGINAL_RESPONSE_DOWNLOAD: std::sync::OnceLock<Imp> = std::sync::OnceLock::new();
+
+thread_local! {
+    /// Links und Formulare, die der Mensch mit der Maus angeklickt hat und die
+    /// einen eingebetteten Rahmen woandershin führen (siehe `nav_policy`,
+    /// `nav_response` und `nav_response_download`).
+    static FRAME_CLICKS: RefCell<crate::pdfs::FrameClicks> = RefCell::new(crate::pdfs::FrameClicks::default());
+}
+
+type DownloadFn = extern "C-unwind" fn(Obj, Sel, Obj, Obj, Obj);
+
+/// Vorposten vor wrys Übernahme eines Downloads, der aus der Antwort eines
+/// Servers wurde. Meist hat der Browser ihn selbst verlangt (der Inhalt lässt
+/// sich nicht anzeigen, oder der Server weist ihn als Datei aus) – dann geht er
+/// unverändert an wry. Mit der Härtung und im Stealth-Fenster macht WebKit aber
+/// auch aus PDFs, die angezeigt werden sollten, von sich aus Downloads. Gilt
+/// das einem Rahmen, den eine Seite nur einbettet, hat niemand danach gefragt:
+/// Zunder sagt den Download ab, bevor es für ihn ein Ziel gibt (Regel:
+/// `pdfs::unasked_download`). Es sei denn, der Mensch hat selbst einen Link
+/// angeklickt oder ein Formular abgeschickt, das den Rahmen dorthin führt –
+/// dann ist es sein Download (`pdfs::FrameClicks`).
+extern "C-unwind" fn nav_response_download(this: Obj, cmd: Sel, webview: Obj, response: Obj, download: Obj) {
+    unsafe {
+        if !response.is_null() && !download.is_null() {
+            let main: bool = msg_send![response, isForMainFrame];
+            let shows: bool = msg_send![response, canShowMIMEType];
+            let inner: Obj = msg_send![response, response];
+            let mut attachment = false;
+            let mut pdf = false;
+            let mut url = String::new();
+            if !inner.is_null() {
+                let http: bool = msg_send![inner, isKindOfClass: class!(NSHTTPURLResponse)];
+                if http {
+                    let disposition: Obj = msg_send![inner, valueForHTTPHeaderField: &*ns("Content-Disposition")];
+                    attachment = crate::pdfs::is_attachment(&string_of(disposition));
+                }
+                let mime: Obj = msg_send![inner, MIMEType];
+                pdf = length_of(mime) <= 255 && crate::pdfs::is_pdf_type(&string_of(mime));
+                let address: Obj = msg_send![inner, URL];
+                let text: Obj = if address.is_null() { std::ptr::null_mut() } else { msg_send![address, absoluteString] };
+                url = string_of(text);
+            }
+            if crate::pdfs::unasked_download(main, shows, attachment, pdf) {
+                let clicked = FRAME_CLICKS.with(|clicks| clicks.borrow_mut().take(webview as usize, &url, Instant::now()));
+                if !clicked {
+                    let done = block2::RcBlock::new(|_resume: *mut AnyObject| {});
+                    let _: () = msg_send![download, cancel: &*done];
+                    if crate::dev::enabled() {
+                        println!("DOWNLOAD abgesagt rahmen pdf={pdf}");
+                    }
+                    emit(UserEvent::Nav(NavEvent { webview: webview as usize, kind: NavKind::FrameFile { pdf } }));
+                    return;
+                }
+                if crate::dev::enabled() {
+                    println!("DOWNLOAD im Rahmen nach Klick pdf={pdf}");
+                }
+            } else if crate::dev::enabled() {
+                println!("DOWNLOAD aus Antwort tab={main} anzeigbar={shows} anhang={attachment}");
+            }
+        }
+        // Ohne wrys Methode bekäme der Download niemanden, der ihm ein Ziel
+        // nennt – WebKit bricht ihn dann von selbst ab.
+        if let Some(original) = ORIGINAL_RESPONSE_DOWNLOAD.get() {
+            let original: DownloadFn = std::mem::transmute(*original);
+            original(this, cmd, webview, response, download);
         }
     }
 }
@@ -1205,6 +1476,12 @@ pub fn cookie_flags(webview: &WebView, host: &str, done: impl Fn(Vec<crate::site
 pub fn in_sandbox() -> bool {
     static SANDBOXED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SANDBOXED.get_or_init(|| std::env::var_os("APP_SANDBOX_CONTAINER_ID").is_some())
+}
+
+/// Beginnt die Adresse mit genau diesem Schema?
+fn has_scheme(url: &str, scheme: &str) -> bool {
+    url.as_bytes().get(scheme.len()) == Some(&b':')
+        && url.get(..scheme.len()).is_some_and(|start| start.eq_ignore_ascii_case(scheme))
 }
 
 /// Was ein Rahmen selbst laden kann. Alles andere (mailto:, tel:, zoommtg: …)
@@ -1368,7 +1645,10 @@ unsafe fn run_dialog(
     input: Option<&str>,
 ) -> (bool, Option<String>) {
     let id = webview as usize;
-    if !is_shown(webview) {
+    // Kein Dialog einer Seite legt sich über die Frage nach Kamera und
+    // Mikrofon: Ein schneller Doppelklick auf seinen Knopf träfe sonst mit dem
+    // zweiten Klick die Frage darunter.
+    if !is_shown(webview) || media_asking() {
         return (false, None);
     }
     let host = frame_host(frame);
@@ -1637,7 +1917,7 @@ extern "C-unwind" fn nav_auth_challenge(
             entry.0 += 1;
             entry.0 > 4
         });
-        if !own || too_many || !is_shown(webview) {
+        if !own || too_many || !is_shown(webview) || media_asking() {
             done.call((CANCEL, std::ptr::null_mut()));
             return;
         }
@@ -1666,6 +1946,385 @@ pub fn reset_dialogs(webview_key: usize) {
     AUTH_PROMPTS.with(|p| {
         p.borrow_mut().remove(&webview_key);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Kamera und Mikrofon je Website
+// ---------------------------------------------------------------------------
+//
+// Will eine Seite aufnehmen, fragt WebKit den Browser. Die Antwort gibt Zunder
+// selbst: nach dem, was für die Website gemerkt ist – sonst mit einer Frage,
+// die den Namen der Website nennt. Die Regeln dazu stehen in `media.rs`.
+
+thread_local! {
+    /// Gemerkte Entscheidungen je Website – so, wie sie in den Einstellungen stehen.
+    static MEDIA_RULES: RefCell<crate::media::Rules> = const { RefCell::new(crate::media::Rules::new()) };
+    /// Was je Tab abgelehnt wurde, seit der Mensch dort zuletzt selbst neu
+    /// geladen oder eine Adresse aufgerufen hat.
+    static MEDIA_REFUSED: RefCell<HashMap<usize, crate::media::Refusals>> = RefCell::new(HashMap::new());
+    /// Tabs privater Fenster und von Stealth-Fenstern: Dort wird nichts gemerkt.
+    static PRIVATE_VIEWS: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+    /// Steht gerade eine Frage zu Kamera oder Mikrofon auf dem Schirm?
+    static MEDIA_ASKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// So lange lässt sich „Erlauben“ nach dem Erscheinen der Frage nicht drücken.
+const MEDIA_HOLD: f64 = 0.7;
+
+/// Die gemerkten Entscheidungen zu Kamera und Mikrofon.
+pub fn set_media_rules(rules: crate::media::Rules) {
+    MEDIA_RULES.with(|known| *known.borrow_mut() = rules);
+}
+
+/// Ein neuer Tab ist entstanden. Für ihn beginnt alles frisch – auch dann,
+/// wenn er im Speicher an der Stelle eines eben geschlossenen liegt und dessen
+/// Vermerke noch nicht weggeräumt sind. `private`: Er gehört zu einem privaten
+/// Fenster oder einem Stealth-Fenster.
+pub fn media_new_view(key: usize, private: bool) {
+    MEDIA_REFUSED.with(|refused| refused.borrow_mut().remove(&key));
+    FRAME_CLICKS.with(|clicks| clicks.borrow_mut().forget(key));
+    PRIVATE_VIEWS.with(|set| {
+        let mut set = set.borrow_mut();
+        if private {
+            set.insert(key);
+        } else {
+            set.remove(&key);
+        }
+    });
+}
+
+/// Der Mensch am Browser lädt die Seite selbst neu oder ruft in diesem Tab
+/// selbst eine Adresse auf: Was dort zu Kamera oder Mikrofon abgelehnt wurde,
+/// gilt dann nicht mehr – Seiten dürfen wieder fragen. Lädt eine Seite sich
+/// selbst neu oder schickt sie den Tab woandershin, bleibt es beim Nein; sonst
+/// könnte sie die Frage in einer Schleife stellen, und die hält den ganzen
+/// Browser an.
+pub fn media_visit_over(webview: usize) {
+    MEDIA_REFUSED.with(|refused| refused.borrow_mut().remove(&webview));
+}
+
+/// Der Mensch hat in diesem Tab selbst weitergeklickt oder geblättert: Die
+/// Geduld des Tabs beginnt neu – einzelne Websites bleiben abgelehnt (siehe
+/// `media::Refusals`).
+pub fn media_user_moved(webview: usize) {
+    MEDIA_REFUSED.with(|refused| {
+        if let Some(tab) = refused.borrow_mut().get_mut(&webview) {
+            tab.moved_on();
+        }
+    });
+}
+
+/// Steht hinter dieser Navigation ein Klick oder Tastendruck des Menschen –
+/// nach WebKits eigener Auskunft? Ohne die Auskunft gilt: nein.
+unsafe fn clicked_by_user(action: Obj) -> bool {
+    let knows: bool = msg_send![action, respondsToSelector: sel!(_isUserInitiated)];
+    knows && msg_send![action, _isUserInitiated]
+}
+
+/// Protokoll, Rechner und Anschluss einer Herkunft, wie WebKit sie nennt.
+unsafe fn origin_parts(origin: Obj) -> (String, String, isize) {
+    if origin.is_null() {
+        return (String::new(), String::new(), 0);
+    }
+    let protocol: Obj = msg_send![origin, protocol];
+    let host: Obj = msg_send![origin, host];
+    let port: isize = msg_send![origin, port];
+    (string_of(protocol).to_ascii_lowercase(), string_of(host), port)
+}
+
+/// Eine Seite möchte Kamera oder Mikrofon benutzen.
+extern "C-unwind" fn media_permission(
+    _this: Obj,
+    _cmd: Sel,
+    webview: Obj,
+    origin: Obj,
+    frame: Obj,
+    kind: isize,
+    decide: &Block<dyn Fn(isize)>,
+) {
+    // WKPermissionDecisionGrant = 1, WKPermissionDecisionDeny = 2. „Frag selbst“
+    // (0) gibt Zunder nie zurück: WebKits eigene Frage merkt sich nichts.
+    let (allowed, how) = unsafe { media_decision(webview, origin, frame, kind) };
+    if crate::dev::enabled() {
+        use std::io::Write;
+        println!("MEDIA art={kind} {} ({how})", if allowed { "erlaubt" } else { "abgelehnt" });
+        let _ = std::io::stdout().flush();
+    }
+    decide.call((if allowed { 1 } else { 2 },));
+}
+
+/// Rückgabe: erlaubt? – und in einem Wort, wie es dazu kam (für die Prüfhilfe).
+unsafe fn media_decision(webview: Obj, origin: Obj, frame: Obj, kind: isize) -> (bool, &'static str) {
+    use crate::media::{self, Verdict, Want};
+    let Some(want) = Want::from_kind(kind) else {
+        return (false, "unbekannte Art");
+    };
+    if webview.is_null() || frame.is_null() {
+        return (false, "ohne Rahmen");
+    }
+    let id = webview as usize;
+    let main: bool = msg_send![frame, isMainFrame];
+    // Wer fragt (der Rahmen) – und in welcher Seite er steckt. Für die Seite
+    // selbst ist das dasselbe; bei einem eingebetteten Rahmen nennt WebKit die
+    // Seite im Tab eigens.
+    let asker_origin: Obj = msg_send![frame, securityOrigin];
+    let (asker_protocol, asker_host, asker_port) = origin_parts(asker_origin);
+    let (protocol, host, port) = if main {
+        (asker_protocol.clone(), asker_host.clone(), asker_port)
+    } else {
+        origin_parts(origin)
+    };
+    // Zunders eigene Seiten nehmen nichts auf.
+    if protocol == "zunder" || asker_protocol == "zunder" {
+        return (false, "eigene Seite");
+    }
+    let label = media::site_label(&host, port);
+    let asker = media::site_label(&asker_host, asker_port);
+    // Wer keinen Namen hat – eine Datei, ein abgeschottetes Dokument –,
+    // bekommt nichts: Die Frage könnte nicht sagen, wer da fragt.
+    if label.is_empty() || asker.is_empty() {
+        return (false, "ohne Namen");
+    }
+    let site = media::site_key(media_protocol(&protocol), &host, port);
+    let private = PRIVATE_VIEWS.with(|set| set.borrow().contains(&id));
+    let remembered = |site: &Option<String>| {
+        site.as_ref()
+            .and_then(|site| MEDIA_RULES.with(|rules| rules.borrow().get(site).copied()))
+            .unwrap_or_default()
+    };
+    // Unter diesem Namen steht ein Nein aus diesem Besuch: die Website – und
+    // für einen Rahmen er selbst in ihr. So sperrt ein Nein an einen Rahmen
+    // nicht die Seite, die ihn einbettet.
+    let visit = if main { label.clone() } else { format!("{label} > {asker}") };
+    let mut rule = remembered(&site);
+    let (refused, exhausted) = MEDIA_REFUSED.with(|tabs| match tabs.borrow().get(&id) {
+        Some(tab) if main => (tab.of(&label), tab.exhausted()),
+        // Was der Seite abgelehnt wurde, bekommt auch kein Rahmen in ihr.
+        Some(tab) => (media::with_refusals(tab.of(&label), tab.of(&visit)), tab.exhausted()),
+        None => (media::Rule::default(), false),
+    });
+    if !main {
+        // Ein gemerktes Nein gilt der Website überall – auch dort, wo sie nur
+        // als Rahmen in einer anderen steckt.
+        let asker_site = media::site_key(media_protocol(&asker_protocol), &asker_host, asker_port);
+        rule = media::with_refusals(rule, remembered(&asker_site));
+    }
+    match media::verdict(want, rule, refused, main, private) {
+        Verdict::Grant => return (true, "gemerkt"),
+        Verdict::Deny => return (false, "gemerkt oder in diesem Besuch abgelehnt"),
+        // Nach mehreren Nein in Folge fragt in diesem Tab niemand mehr.
+        Verdict::Ask if exhausted => return (false, "Geduld des Tabs erschöpft"),
+        Verdict::Ask => {}
+    }
+    // Ein Tab im Hintergrund bekommt keine Frage – und damit auch nichts.
+    if !is_shown(webview) {
+        return (false, "Tab nicht zu sehen");
+    }
+    // Die Frage legt sich über keinen anderen Dialog – und keiner über sie
+    // (siehe `run_dialog`): Wer auf den einen klickt, soll nie den anderen treffen.
+    if modal_open() {
+        return (false, "ein anderer Dialog ist offen");
+    }
+    // Ist die Liste der gemerkten Websites voll, gibt es das Häkchen nicht –
+    // statt eines Häkchens, das dann nichts bewirkt.
+    let can_remember = main
+        && !private
+        && site.as_ref().is_some_and(|site| MEDIA_RULES.with(|rules| media::has_room(&rules.borrow(), site)));
+    let Some((allowed, remember)) = media_prompt(want, &asker, &label, main, can_remember) else {
+        return (false, "es steht schon eine Frage offen");
+    };
+    if !allowed {
+        // Für diesen Besuch ist die Frage beantwortet.
+        MEDIA_REFUSED.with(|tabs| tabs.borrow_mut().entry(id).or_default().refuse(&visit, want));
+    }
+    if let (true, Some(site)) = (remember && can_remember, site) {
+        let kept = MEDIA_RULES.with(|rules| {
+            let mut rules = rules.borrow_mut();
+            media::remember(&mut rules, &site, want, allowed).then(|| rules.get(&site).copied()).flatten()
+        });
+        if let Some(rule) = kept {
+            emit(UserEvent::MediaRule { site, rule });
+            return (allowed, "gefragt, gemerkt");
+        }
+    }
+    (allowed, "gefragt")
+}
+
+/// Das Protokoll, wie es beim Merken zählt. Prüfhilfe: Im Probelauf gibt es
+/// keine verschlüsselten Seiten – dort zählt eine unverschlüsselte wie eine
+/// verschlüsselte, damit sich auch das Merken prüfen lässt.
+fn media_protocol(protocol: &str) -> &str {
+    match protocol {
+        "http" if crate::dev::var_os("ZUNDER_MEDIA_HTTP").is_some() => "https",
+        other => other,
+    }
+}
+
+/// Der Name, unter dem sich Zunder die Website dieser Adresse merkt – wenn es
+/// für sie überhaupt etwas merkt.
+pub fn media_site_of(address: &str) -> Option<String> {
+    let parsed = url::Url::parse(address).ok()?;
+    let port = parsed.port().map_or(0, |port| port as isize);
+    crate::media::site_key(media_protocol(parsed.scheme()), parsed.host_str()?, port)
+}
+
+/// Läuft gerade irgendein modaler Dialog der App?
+unsafe fn modal_open() -> bool {
+    let app: Retained<AnyObject> = msg_send![class!(NSApplication), sharedApplication];
+    let window: Obj = msg_send![&*app, modalWindow];
+    !window.is_null()
+}
+
+/// Steht gerade eine Frage zu Kamera oder Mikrofon auf dem Schirm? Solange
+/// öffnet keine Seite einen eigenen Dialog darüber.
+fn media_asking() -> bool {
+    MEDIA_ASKING.with(std::cell::Cell::get)
+}
+
+/// Vermerk „es steht eine Frage offen“. Er verschwindet, wie auch immer die
+/// Frage endet – sonst bekäme nach einem Abbruch nie wieder jemand eine.
+struct Asking;
+
+impl Asking {
+    fn begin() -> Option<Asking> {
+        (!MEDIA_ASKING.with(|asking| asking.replace(true))).then_some(Asking)
+    }
+}
+
+impl Drop for Asking {
+    fn drop(&mut self) {
+        MEDIA_ASKING.with(|asking| asking.set(false));
+    }
+}
+
+/// Ein Taktgeber, der mit seinem Besitzer endet.
+struct Ticking(Retained<AnyObject>);
+
+impl Drop for Ticking {
+    fn drop(&mut self) {
+        unsafe {
+            let _: () = msg_send![&*self.0, invalidate];
+        }
+    }
+}
+
+/// Fragt, ob die Website aufnehmen darf. Rückgabe: (erlaubt, merken) – oder
+/// nichts, wenn schon eine solche Frage offen ist.
+unsafe fn media_prompt(
+    want: crate::media::Want,
+    asker: &str,
+    site: &str,
+    main: bool,
+    can_remember: bool,
+) -> Option<(bool, bool)> {
+    use crate::media::Want;
+    // Eine zweite Frage stapelt sich nicht über die erste.
+    let _asking = Asking::begin()?;
+    let title = t(match want {
+        Want::Camera => "media_ask_camera",
+        Want::Microphone => "media_ask_mic",
+        Want::Both => "media_ask_both",
+    })
+    .replace("{site}", asker);
+    let mut text = String::new();
+    if !main {
+        // Nicht die Seite selbst fragt, sondern etwas, das sie einbettet.
+        if site == asker {
+            text.push_str(t("media_frame"));
+        } else {
+            text.push_str(&t("media_frame_on").replace("{site}", site));
+        }
+        text.push_str("\n\n");
+    }
+    text.push_str(t("media_text"));
+    if crate::dev::enabled() {
+        use std::io::Write;
+        println!("MEDIAFRAGE {title} || {} || merken={can_remember}", text.replace('\n', " "));
+        let _ = std::io::stdout().flush();
+    }
+
+    let alert: Retained<AnyObject> = msg_send![class!(NSAlert), new];
+    let _: () = msg_send![&*alert, setMessageText: &*ns(&title)];
+    let _: () = msg_send![&*alert, setInformativeText: &*ns(&text)];
+    // Der erste Knopf ist der, den die Eingabetaste drückt: das Nein.
+    let _: Obj = msg_send![&*alert, addButtonWithTitle: &*ns(t("media_deny"))];
+    let allow: Option<Retained<AnyObject>> = msg_send![&*alert, addButtonWithTitle: &*ns(t("media_allow"))];
+    if can_remember {
+        let _: () = msg_send![&*alert, setShowsSuppressionButton: true];
+        let button: Obj = msg_send![&*alert, suppressionButton];
+        if !button.is_null() {
+            let _: () = msg_send![button, setTitle: &*ns(&t("media_remember").replace("{site}", site))];
+        }
+    }
+    // „Erlauben“ lässt sich erst drücken, wenn die Frage einen Augenblick lang
+    // ununterbrochen zuoberst stand: Eine Seite, die zu schnellen Klicks
+    // verleitet und die Frage genau darunter aufgehen lässt, bekommt so kein
+    // Ja untergeschoben. Legt sich etwas anderes darüber oder ist Zunder nicht
+    // vorn, beginnt die Zeit von vorn. Fehlt der Taktgeber, bleibt der Knopf
+    // gesperrt – dann lässt sich nur ablehnen.
+    let mut ticking = None;
+    if let Some(allow) = allow.as_ref() {
+        let _: () = msg_send![&**allow, setEnabled: false];
+        let button = allow.clone();
+        let panel: Obj = msg_send![&*alert, window];
+        let panel = panel as usize;
+        // Prüfhilfe: Die Probe-App ist selten vorn.
+        let always_front = crate::dev::var_os("ZUNDER_MODAL_FRONT").is_some();
+        let since: std::rc::Rc<std::cell::Cell<Option<Instant>>> = std::rc::Rc::default();
+        let watch = block2::RcBlock::new(move |_timer: Obj| {
+            let app: Retained<AnyObject> = msg_send![class!(NSApplication), sharedApplication];
+            let modal: Obj = msg_send![&*app, modalWindow];
+            let active: bool = msg_send![&*app, isActive];
+            let ready = if modal as usize == panel && (active || always_front) {
+                let start = since.get().unwrap_or_else(Instant::now);
+                since.set(Some(start));
+                start.elapsed().as_secs_f64() >= MEDIA_HOLD
+            } else {
+                since.set(None);
+                false
+            };
+            let _: () = msg_send![&*button, setEnabled: ready];
+        });
+        let timer: Option<Retained<AnyObject>> =
+            msg_send![class!(NSTimer), timerWithTimeInterval: 0.1f64, repeats: true, block: &*watch];
+        if let Some(timer) = timer {
+            let run_loop: Retained<AnyObject> = msg_send![class!(NSRunLoop), currentRunLoop];
+            let _: () = msg_send![&*run_loop, addTimer: &*timer, forMode: &*ns("NSModalPanelRunLoopMode")];
+            ticking = Some(Ticking(timer));
+        }
+    }
+
+    // NSAlertSecondButtonReturn = 1001
+    let response: isize = msg_send![&*alert, runModal];
+    drop(ticking);
+    let allowed = response == 1001;
+    let mut remember = false;
+    if can_remember {
+        let button: Obj = msg_send![&*alert, suppressionButton];
+        if !button.is_null() {
+            let state: isize = msg_send![button, state];
+            remember = state == 1;
+        }
+    }
+    Some((allowed, remember))
+}
+
+/// Beendet eine laufende Aufnahme in diesem Tab – wenn jemand der Website
+/// Kamera oder Mikrofon wieder nimmt, soll das sofort gelten.
+pub fn stop_capture(webview: &WebView, camera: bool, microphone: bool) {
+    let w = webview.webview();
+    unsafe {
+        // WKMediaCaptureStateNone = 0
+        let known: bool = msg_send![&*w, respondsToSelector: sel!(setCameraCaptureState:completionHandler:)];
+        if camera && known {
+            let _: () = msg_send![&*w, setCameraCaptureState: 0isize, completionHandler: Option::<&Block<dyn Fn()>>::None];
+        }
+        let known: bool = msg_send![&*w, respondsToSelector: sel!(setMicrophoneCaptureState:completionHandler:)];
+        if microphone && known {
+            let _: () =
+                msg_send![&*w, setMicrophoneCaptureState: 0isize, completionHandler: Option::<&Block<dyn Fn()>>::None];
+        }
+    }
 }
 
 thread_local! {
@@ -1735,6 +2394,22 @@ pub fn install_hooks(existing: &WebView) {
             }
             None => HOOKS.with(|h| h.borrow_mut().push("decidePolicyForNavigationResponse".into())),
         }
+        // Und die Übernahme eines Downloads, der aus einer Antwort wurde: Davor
+        // sagt Zunder ab, was WebKit für einen eingebetteten Rahmen von sich aus
+        // herunterladen will.
+        let previous = ffi::class_replaceMethod(
+            nav as *const AnyClass as *mut AnyClass,
+            sel!(webView:navigationResponse:didBecomeDownload:),
+            transmute::<DownloadFn, Imp>(nav_response_download),
+            c"v@:@@@".as_ptr(),
+        );
+        match previous {
+            Some(previous) => {
+                let _ = ORIGINAL_RESPONSE_DOWNLOAD.set(previous);
+                HOOKS.with(|h| h.borrow_mut().push("navigationResponseDidBecomeDownload(ersetzt)".into()));
+            }
+            None => HOOKS.with(|h| h.borrow_mut().push("navigationResponseDidBecomeDownload".into())),
+        }
         add_method(
             nav,
             sel!(webView:didStartProvisionalNavigation:),
@@ -1774,6 +2449,22 @@ pub fn install_hooks(existing: &WebView) {
             transmute::<extern "C-unwind" fn(Obj, Sel, Obj, Obj, Obj, Obj), Imp>(rule_list_action),
             c"v@:@@@@",
         );
+        // Kamera und Mikrofon: Die Frage stellt Zunder selbst. wry erführe
+        // dabei nicht, welche Website fragt – und WebKits eigene Frage merkt
+        // sich nichts.
+        type MediaFn = extern "C-unwind" fn(Obj, Sel, Obj, Obj, Obj, isize, &Block<dyn Fn(isize)>);
+        let previous = ffi::class_replaceMethod(
+            ui as *const AnyClass as *mut AnyClass,
+            sel!(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:),
+            transmute::<MediaFn, Imp>(media_permission),
+            c"v@:@@@q@?".as_ptr(),
+        );
+        HOOKS.with(|h| {
+            h.borrow_mut().push(
+                if previous.is_some() { "requestMediaCapturePermission(ersetzt)" } else { "requestMediaCapturePermission" }
+                    .into(),
+            )
+        });
         add_method(
             ui,
             sel!(webViewDidClose:),
@@ -1898,9 +2589,9 @@ extern "C-unwind" fn bridge_received(_this: Obj, _cmd: Sel, _controller: Obj, me
                 return;
             }
             // „Trotzdem öffnen“ auf der Warnung vor einer gemeldeten Betrugsseite.
-            if let Some(host) = body.strip_prefix("g:") {
+            if let Some(address) = body.strip_prefix("g:") {
                 if from_error_page {
-                    crate::blocker::guard_allow(host);
+                    crate::blocker::guard_allow(address);
                 }
                 return;
             }
@@ -1980,6 +2671,9 @@ pub fn own_controller(config: &WKWebViewConfiguration, stealth: bool) {
         let _: () = msg_send![config, setUserContentController: &*fresh];
     }
     attach_bridge(config);
+    if !(guards().hardened || stealth) {
+        attach_pdfs(config);
+    }
     if stealth {
         attach_watch(config);
     }
@@ -2024,6 +2718,260 @@ fn attach_bridge(config: &WKWebViewConfiguration) {
         let script: Retained<AnyObject> = msg_send![
             allocated,
             initWithSource: &*ns(LOGINS_JS),
+            injectionTime: 0isize,
+            forMainFrameOnly: true,
+            inContentWorld: &*world
+        ];
+        let _: () = msg_send![&*controller, addUserScript: &*script];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Eingebettete PDFs (`zunder-pdf:`)
+// ---------------------------------------------------------------------------
+//
+// Hilft PDF-Rahmen, die WebKit leer lässt – was und warum, steht in `pdfs.rs`.
+// Hier: das Skript in der Seite, die Stelle, die Dateien annimmt und wieder
+// ausliefert, und die Anmeldung der eigenen Adresse bei WebKit.
+
+const PDFS_JS: &str = include_str!("../ui/pdfs.js");
+
+thread_local! {
+    static PDF_SHELF: RefCell<crate::pdfs::Shelf> = RefCell::new(crate::pdfs::Shelf::default());
+}
+
+/// Schlüssel dieses Starts: Mit ihm beginnt jede Lieferung von Zunders Skript.
+/// Er steht nur in dessen abgeschotteter Welt – die Skripte einer Seite sehen
+/// ihn nicht und können deshalb selbst nichts abliefern.
+fn pdf_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| crate::pdfs::random_hex().unwrap_or_default())
+}
+
+/// Im Tab steht eine neue Seite: Was die alte abgelegt hat, gilt nicht mehr.
+/// Aufgerufen in dem Augenblick, in dem WebKit die neue Seite übernimmt – also
+/// bevor sie selbst etwas laden kann, und erst nachdem die alte nichts mehr
+/// abliefern kann. (Beim Aufbruch wäre es zu früh: Die alte Seite läuft dann
+/// noch, und ein Aufbruch, aus dem nur ein Download wird, ließe sie stehen.)
+pub fn pdfs_page_left(view: usize) {
+    PDF_SHELF.with(|shelf| shelf.borrow_mut().forget(view));
+    // Auch was der Mensch auf der alten Seite für einen ihrer Rahmen
+    // angeklickt hat, gilt für die neue nicht.
+    FRAME_CLICKS.with(|clicks| clicks.borrow_mut().forget(view));
+}
+
+/// Für wen eine Antwort auf eine Anfrage an `zunder-pdf:` bestimmt ist.
+#[derive(Clone, Copy, PartialEq)]
+enum PdfReader {
+    /// Zunders Skript: Es läuft unter der Herkunft der Seite und muss die
+    /// Kennung lesen können.
+    Script,
+    /// Der Rahmen, der die Datei zeigt.
+    Frame,
+}
+
+/// Eine Absage: Der Abruf scheitert, als gäbe es die Adresse nicht – ohne
+/// Antwort, deren Zeilen oder Nummer ein Skript der Seite lesen könnte.
+unsafe fn pdf_refuse(task: Obj) {
+    // NSURLErrorUnsupportedURL = -1002
+    let error: Retained<AnyObject> = msg_send![
+        class!(NSError),
+        errorWithDomain: &*ns("NSURLErrorDomain"),
+        code: -1002isize,
+        userInfo: Option::<&AnyObject>::None
+    ];
+    let _: () = msg_send![task, didFailWithError: &*error];
+}
+
+/// Antwort auf eine Anfrage an `zunder-pdf:`.
+unsafe fn pdf_reply(task: Obj, url: Obj, status: isize, kind: &str, body: &[u8], reader: PdfReader) {
+    let headers: Retained<AnyObject> = msg_send![class!(NSMutableDictionary), new];
+    let set = |name: &str, value: &str| {
+        let _: () = msg_send![&*headers, setObject: &*ns(value), forKey: &*ns(name)];
+    };
+    set("Content-Type", kind);
+    set("Content-Length", &body.len().to_string());
+    set("Cache-Control", "no-store");
+    // Was hier herausgeht, ist ein PDF oder ein kurzer Text – WebKit soll es
+    // nie als Seite oder als Skript deuten.
+    set("X-Content-Type-Options", "nosniff");
+    match reader {
+        PdfReader::Script => set("Access-Control-Allow-Origin", "*"),
+        PdfReader::Frame => {
+            // Der Rahmen steht in einer fremden Seite – auch in einer, die von
+            // allem Eingebetteten eine ausdrückliche Erlaubnis verlangt.
+            set("Cross-Origin-Resource-Policy", "cross-origin");
+            set("Cross-Origin-Embedder-Policy", "require-corp");
+        }
+    }
+    let allocated: Allocated<AnyObject> = msg_send![class!(NSHTTPURLResponse), alloc];
+    let response: Option<Retained<AnyObject>> = msg_send![
+        allocated,
+        initWithURL: url,
+        statusCode: status,
+        HTTPVersion: &*ns("HTTP/1.1"),
+        headerFields: &*headers
+    ];
+    let Some(response) = response else {
+        pdf_refuse(task);
+        return;
+    };
+    let _: () = msg_send![task, didReceiveResponse: &*response];
+    if !body.is_empty() {
+        let data = objc2_foundation::NSData::with_bytes(body);
+        let _: () = msg_send![task, didReceiveData: &*data];
+    }
+    let _: () = msg_send![task, didFinish];
+}
+
+/// WebKit reicht jede Anfrage an `zunder-pdf:` hierher – samt der WebView,
+/// aus der sie kommt. Beantwortet wird sie sofort, noch in diesem Aufruf.
+extern "C-unwind" fn pdf_task_start(_this: Obj, _cmd: Sel, webview: Obj, task: Obj) {
+    use crate::pdfs::{Ask, Refusal};
+    if task.is_null() {
+        return;
+    }
+    unsafe {
+        let request: Obj = msg_send![task, request];
+        let url: Obj = if request.is_null() { std::ptr::null_mut() } else { msg_send![request, URL] };
+        if url.is_null() {
+            pdf_refuse(task);
+            return;
+        }
+        let text: Obj = msg_send![url, absoluteString];
+        let address = if length_of(text) > 2048 { String::new() } else { string_of(text) };
+        let method: Obj = msg_send![request, HTTPMethod];
+        let method = if length_of(method) > 16 { String::new() } else { string_of(method) };
+        let view = webview as usize;
+        const TEXT: &str = "text/plain; charset=utf-8";
+        match crate::pdfs::route(&method, &address) {
+            Ask::Put => {
+                // Nur ein Körper am Stück: So schickt ihn Zunders Skript. Alles
+                // andere (ein Strom, eine Datei von der Platte) wird nicht gelesen.
+                let limit = crate::pdfs::Limits::default().doc + crate::pdfs::KEY_LEN;
+                let data: Option<Retained<objc2_foundation::NSData>> = msg_send![request, HTTPBody];
+                let size = data.as_ref().map_or(0, |data| data.len());
+                let result = match data.as_ref() {
+                    Some(data) if size > 0 && size <= limit => {
+                        // Gelesen wird an Ort und Stelle: Die Daten gehören der
+                        // Anfrage und ändern sich nicht, solange `data` lebt.
+                        let body = data.as_bytes_unchecked();
+                        PDF_SHELF.with(|shelf| {
+                            shelf.borrow_mut().put(view, pdf_key(), body, Instant::now(), crate::pdfs::random_hex)
+                        })
+                    }
+                    _ => Err(Refusal::Size),
+                };
+                if crate::dev::enabled() {
+                    use std::io::Write;
+                    match &result {
+                        Ok(token) => println!("PDF abgelegt bytes={size} kennung={token}"),
+                        Err(why) => println!("PDF abgelehnt bytes={size} ({why:?})"),
+                    }
+                    let _ = std::io::stdout().flush();
+                }
+                match result {
+                    Ok(token) => pdf_reply(task, url, 200, TEXT, token.as_bytes(), PdfReader::Script),
+                    // „Gerade zu viel“ erfährt nur, wer den Schlüssel hatte – also
+                    // Zunders Skript. Es versucht es später noch einmal.
+                    Err(Refusal::Busy) => pdf_reply(task, url, 429, TEXT, b"", PdfReader::Script),
+                    Err(_) => pdf_refuse(task),
+                }
+            }
+            Ask::Doc(token) => {
+                let found = PDF_SHELF.with(|shelf| shelf.borrow().get(view, &token));
+                if crate::dev::enabled() {
+                    use std::io::Write;
+                    println!("PDF abgeholt kennung={token} {}", if found.is_some() { "geliefert" } else { "unbekannt" });
+                    let _ = std::io::stdout().flush();
+                }
+                match found {
+                    Some(bytes) => pdf_reply(task, url, 200, "application/pdf", &bytes, PdfReader::Frame),
+                    None => pdf_refuse(task),
+                }
+            }
+            Ask::Unknown => pdf_refuse(task),
+        }
+    }
+}
+
+/// Die Antwort ist längst geschickt, wenn WebKit einen Abruf abbricht.
+extern "C-unwind" fn pdf_task_stop(_this: Obj, _cmd: Sel, _webview: Obj, _task: Obj) {}
+
+/// Die eine Stelle für alle Tabs. Die Klasse entsteht beim ersten Gebrauch.
+fn pdf_handler() -> Retained<AnyObject> {
+    thread_local! {
+        static HANDLER: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
+    }
+    HANDLER.with(|slot| {
+        slot.borrow_mut()
+            .get_or_insert_with(|| unsafe {
+                let name = c"ZunderPdfShelf";
+                let class = match AnyClass::get(name) {
+                    Some(class) => class,
+                    None => {
+                        let mut builder = objc2::runtime::ClassBuilder::new(name, class!(NSObject))
+                            .expect("Klassenname ist frei");
+                        builder.add_method::<AnyObject, _>(
+                            sel!(webView:startURLSchemeTask:),
+                            pdf_task_start as extern "C-unwind" fn(Obj, Sel, Obj, Obj),
+                        );
+                        builder.add_method::<AnyObject, _>(
+                            sel!(webView:stopURLSchemeTask:),
+                            pdf_task_stop as extern "C-unwind" fn(Obj, Sel, Obj, Obj),
+                        );
+                        builder.register()
+                    }
+                };
+                msg_send![class, new]
+            })
+            .clone()
+    })
+}
+
+/// Hängt die Hilfe für PDF-Rahmen an die Konfiguration eines Inhalts-Tabs:
+/// die Stelle hinter `zunder-pdf:` und Zunders Skript (abgeschottete Welt, nur
+/// im Hauptrahmen).
+fn attach_pdfs(config: &WKWebViewConfiguration) {
+    let key = pdf_key();
+    if key.len() != crate::pdfs::KEY_LEN {
+        return;
+    }
+    unsafe {
+        // Zwei Zusagen von WebKit braucht es, sonst lüde der Rahmen die Adresse
+        // gar nicht erst: Die Schutzregeln einer Seite (`frame-src`) lassen sie
+        // zu, und in einer verschlüsselt geladenen Seite gilt sie nicht als
+        // unsicherer Inhalt. Was unter der Adresse zu holen ist, bestimmt allein
+        // der Browser – siehe `pdfs.rs`. Kennt das System die Zusagen nicht,
+        // bleibt alles, wie WebKit es von sich aus macht.
+        let pool: Option<Retained<AnyObject>> = msg_send![config, processPool];
+        let Some(pool) = pool else {
+            return;
+        };
+        let lenient: bool = msg_send![&*pool, respondsToSelector: sel!(_registerURLSchemeAsBypassingContentSecurityPolicy:)];
+        let secure: bool = msg_send![&*pool, respondsToSelector: sel!(_registerURLSchemeAsSecure:)];
+        if !(lenient && secure) {
+            return;
+        }
+        let scheme = ns(crate::pdfs::SCHEME);
+        // Ein Tab, den eine Seite öffnet, bringt die Stelle schon mit (seine
+        // Konfiguration ist eine Kopie) – zweimal anmelden lässt WebKit nicht zu.
+        let present: Option<Retained<AnyObject>> = msg_send![config, urlSchemeHandlerForURLScheme: &*scheme];
+        if present.is_none() {
+            let handler = pdf_handler();
+            let _: () = msg_send![config, setURLSchemeHandler: &*handler, forURLScheme: &*scheme];
+        }
+        let _: () = msg_send![&*pool, _registerURLSchemeAsBypassingContentSecurityPolicy: &*scheme];
+        let _: () = msg_send![&*pool, _registerURLSchemeAsSecure: &*scheme];
+
+        let controller = config.userContentController();
+        let world: Retained<AnyObject> = msg_send![class!(WKContentWorld), defaultClientWorld];
+        let source = PDFS_JS.replace("%KEY%", key);
+        let allocated: Allocated<AnyObject> = msg_send![class!(WKUserScript), alloc];
+        // WKUserScriptInjectionTimeAtDocumentStart = 0
+        let script: Retained<AnyObject> = msg_send![
+            allocated,
+            initWithSource: &*ns(&source),
             injectionTime: 0isize,
             forMainFrameOnly: true,
             inContentWorld: &*world
@@ -2523,20 +3471,113 @@ pub fn traffic_lights(webview: &WebView) -> String {
     parts.join(" | ")
 }
 
+thread_local! {
+    /// Prüfhilfe: Zähler, mit dem sich schon geplante Eingriffe in Dialoge
+    /// verwerfen lassen (siehe `forget_modal_plans`).
+    static MODAL_PLANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Prüfhilfe: verwirft alles, was für einen Dialog geplant, aber noch nicht
+/// geschehen ist. Solche Eingriffe warten sonst auf den nächsten Dialog – und
+/// träfen dann den falschen.
+pub fn forget_modal_plans() {
+    MODAL_PLANS.with(|plans| plans.set(plans.get() + 1));
+}
+
+/// Prüfhilfe: führt etwas aus, sobald ein Dialog seit `seconds` offen sein kann.
+unsafe fn in_modal_after(seconds: f64, action: impl Fn() + 'static) {
+    let planned = MODAL_PLANS.with(std::cell::Cell::get);
+    let run = block2::RcBlock::new(move |_timer: Obj| {
+        if MODAL_PLANS.with(std::cell::Cell::get) == planned {
+            action();
+        }
+    });
+    let timer: Option<Retained<AnyObject>> =
+        msg_send![class!(NSTimer), timerWithTimeInterval: seconds, repeats: false, block: &*run];
+    if let Some(timer) = timer {
+        let run_loop: Retained<AnyObject> = msg_send![class!(NSRunLoop), currentRunLoop];
+        let _: () = msg_send![&*run_loop, addTimer: &*timer, forMode: &*ns("NSModalPanelRunLoopMode")];
+    }
+}
+
 /// Prüfhilfe: bricht einen modalen Dialog nach der angegebenen Zeit ab.
 pub fn abort_modal_after(seconds: f64) {
     unsafe {
-        let app: Retained<AnyObject> = msg_send![class!(NSApplication), sharedApplication];
-        let modes: Retained<AnyObject> =
-            msg_send![class!(NSArray), arrayWithObject: &*ns("NSModalPanelRunLoopMode")];
-        let _: () = msg_send![
-            &*app,
-            performSelector: sel!(abortModal),
-            withObject: Option::<&AnyObject>::None,
-            afterDelay: seconds,
-            inModes: &*modes
-        ];
+        in_modal_after(seconds, || {
+            let app: Retained<AnyObject> = msg_send![class!(NSApplication), sharedApplication];
+            let _: () = msg_send![&*app, abortModal];
+        });
     }
+}
+
+/// Prüfhilfe: Die Seite gilt auch dann als sichtbar, wenn das Probefenster
+/// verdeckt ist. Sonst wartet WebKit mit manchem – etwa mit der Frage nach der
+/// Kamera –, bis jemand das Fenster nach vorn holt.
+pub fn stay_visible(webview: &WebView) {
+    if crate::dev::var_os("ZUNDER_ALWAYS_VISIBLE").is_none() {
+        return;
+    }
+    let w = webview.webview();
+    unsafe {
+        let known: bool = msg_send![&*w, respondsToSelector: sel!(_setWindowOcclusionDetectionEnabled:)];
+        if known {
+            let _: () = msg_send![&*w, _setWindowOcclusionDetectionEnabled: false];
+        }
+    }
+}
+
+/// Prüfhilfe: drückt nach der angegebenen Zeit einen Knopf des offenen Dialogs
+/// – den, dessen Aufschrift den Text enthält. Ein gesperrter Knopf bleibt es.
+pub fn click_modal_after(seconds: f64, title: &str) {
+    use std::io::Write;
+    let wanted = title.to_string();
+    unsafe {
+        in_modal_after(seconds, move || {
+            let app: Retained<AnyObject> = msg_send![class!(NSApplication), sharedApplication];
+            let window: Obj = msg_send![&*app, modalWindow];
+            let content: Obj = if window.is_null() { std::ptr::null_mut() } else { msg_send![window, contentView] };
+            match find_button(content, &wanted, 0) {
+                Some(button) => {
+                    let enabled: bool = msg_send![button, isEnabled];
+                    println!("MODAL {wanted}: {}", if enabled { "gedrückt" } else { "gesperrt" });
+                    let _ = std::io::stdout().flush();
+                    if enabled {
+                        let _: () = msg_send![button, performClick: Option::<&AnyObject>::None];
+                    }
+                }
+                None => {
+                    println!("MODAL {wanted}: {}", if window.is_null() { "kein Dialog" } else { "kein solcher Knopf" });
+                    let _ = std::io::stdout().flush();
+                }
+            }
+        });
+    }
+}
+
+/// Sucht in einer Ansicht den Knopf, dessen Aufschrift den Text enthält.
+unsafe fn find_button(view: Obj, title: &str, depth: usize) -> Option<Obj> {
+    if view.is_null() || depth > 12 {
+        return None;
+    }
+    let is_button: bool = msg_send![view, isKindOfClass: class!(NSButton)];
+    if is_button {
+        let label: Obj = msg_send![view, title];
+        if string_of(label).contains(title) {
+            return Some(view);
+        }
+    }
+    let subviews: Obj = msg_send![view, subviews];
+    if subviews.is_null() {
+        return None;
+    }
+    let count: usize = msg_send![subviews, count];
+    for index in 0..count.min(200) {
+        let child: Obj = msg_send![subviews, objectAtIndex: index];
+        if let Some(found) = find_button(child, title, depth + 1) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Prüfhilfe: erzwingt helles oder dunkles Erscheinungsbild der App.
@@ -2595,5 +3636,70 @@ pub fn reveal_in_finder(path: &std::path::Path) {
         let list: Retained<AnyObject> = msg_send![class!(NSArray), arrayWithObject: &*file];
         let workspace: Retained<AnyObject> = msg_send![class!(NSWorkspace), sharedWorkspace];
         let _: () = msg_send![&*workspace, activateFileViewerSelectingURLs: &*list];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anmeldung_einer_internen_seite_gilt_einer_webview_und_einmal() {
+        let now = Instant::now();
+        let app = "zunder://app-time/".to_string();
+        let mut list = Vec::new();
+        expect_in(&mut list, 1, Some(app.clone()), now);
+        // Eine andere WebView – etwa der Tab einer Webseite, die es im selben
+        // Augenblick mit derselben Adresse versucht – löst sie nicht ein.
+        assert!(!expected_in(&mut list, 2, &app, now));
+        assert!(!expected_in(&mut list, 1, "zunder://app-weather/", now));
+        assert!(expected_in(&mut list, 1, &app, now));
+        // Einmal: Danach ist sie verbraucht.
+        assert!(!expected_in(&mut list, 1, &app, now));
+        assert!(list.is_empty());
+        // Eine neue Anmeldung löst die ältere derselben WebView ab; die einer
+        // anderen bleibt stehen.
+        expect_in(&mut list, 1, Some(app.clone()), now);
+        expect_in(&mut list, 2, Some(app.clone()), now);
+        expect_in(&mut list, 1, Some("zunder://newtab/".to_string()), now);
+        assert_eq!(list.len(), 2);
+        assert!(!expected_in(&mut list, 1, &app, now));
+        assert!(expected_in(&mut list, 1, "zunder://newtab/", now));
+        assert!(expected_in(&mut list, 2, &app, now));
+        // Nach Ablauf der Frist gilt sie nicht mehr.
+        expect_in(&mut list, 3, Some(app.clone()), now);
+        assert!(!expected_in(&mut list, 3, &app, now + EXPECT_WINDOW));
+        assert!(list.is_empty());
+        // Schickt der Browser die WebView danach ins Netz, ist die Anmeldung überholt.
+        expect_in(&mut list, 4, Some(app.clone()), now);
+        expect_in(&mut list, 4, None, now);
+        assert!(!expected_in(&mut list, 4, &app, now));
+        // Nur eigene Adressen lassen sich anmelden.
+        assert_eq!(internal_address("zunder://app-time/").as_deref(), Some("zunder://app-time/"));
+        assert_eq!(internal_address("https://example.com/"), None);
+        assert_eq!(internal_address("kein url"), None);
+    }
+
+    #[test]
+    fn angekuendigte_dateinamen_kommen_der_reihe_nach_und_verfallen() {
+        let now = Instant::now();
+        let mut list = Vec::new();
+        name_in(&mut list, 1, "zeiten.csv".into(), now);
+        name_in(&mut list, 1, "zeiten-2026-11.csv".into(), now);
+        name_in(&mut list, 2, "andere.csv".into(), now);
+        // Je WebView in der Reihenfolge der Ankündigung, jede einmal.
+        assert_eq!(name_out(&mut list, 1, now).as_deref(), Some("zeiten.csv"));
+        assert_eq!(name_out(&mut list, 2, now).as_deref(), Some("andere.csv"));
+        assert_eq!(name_out(&mut list, 1, now).as_deref(), Some("zeiten-2026-11.csv"));
+        assert_eq!(name_out(&mut list, 1, now), None);
+        // Mehr als vier warten nicht: Die älteste weicht.
+        for index in 0..6 {
+            name_in(&mut list, 7, format!("datei-{index}.csv"), now);
+        }
+        assert_eq!(list.len(), 4);
+        assert_eq!(name_out(&mut list, 7, now).as_deref(), Some("datei-2.csv"));
+        // Nach der Frist gilt keine mehr.
+        assert_eq!(name_out(&mut list, 7, now + FILE_NAME_WINDOW), None);
+        assert!(list.is_empty());
     }
 }

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark">
+<title></title>
+<link rel="stylesheet" href="apps.css">
+<link rel="stylesheet" href="app-weather.css">
+</head>
+<body class="sky-night">
+<!--ICONS-->
+<canvas id="sky" aria-hidden="true"></canvas>
+<div id="shade" aria-hidden="true"></div>
+
+<header id="bar">
+  <button id="place-button" type="button" class="pill">
+    <svg><use href="#i-location"/></svg>
+    <span id="place-name"></span>
+    <svg class="chevron"><use href="#i-chevron-down"/></svg>
+  </button>
+  <span id="updated"></span>
+  <button id="refresh" type="button" class="round"><svg><use href="#i-reload"/></svg></button>
+</header>
+
+<section id="places" hidden>
+  <form id="search-form">
+    <svg><use href="#i-search"/></svg>
+    <input id="search" type="search" autocomplete="off" spellcheck="false">
+  </form>
+  <button id="mine" type="button" class="row">
+    <svg><use href="#i-location"/></svg>
+    <span id="mine-label"></span>
+  </button>
+  <p id="mine-note" class="note" hidden></p>
+  <div id="results"></div>
+  <h3 id="saved-title" hidden></h3>
+  <div id="saved"></div>
+  <p id="private-note" class="note" hidden></p>
+</section>
+
+<main id="content" hidden>
+  <section id="now">
+    <svg id="now-icon" class="big"><use href="#i-cloud"/></svg>
+    <div id="now-temp"></div>
+    <div id="now-text"></div>
+    <div id="now-range"></div>
+    <dl id="facts"></dl>
+  </section>
+
+  <section id="soon" class="card">
+    <h2></h2>
+    <p id="soon-text"></p>
+    <div id="soon-bars"></div>
+    <div id="soon-axis"></div>
+  </section>
+
+  <section id="radar" class="card">
+    <h2></h2>
+    <div id="radar-box">
+      <canvas id="radar-canvas"></canvas>
+      <p id="radar-note" hidden></p>
+    </div>
+    <div id="radar-controls" hidden>
+      <button id="radar-play" type="button" class="round"><svg><use href="#i-pause"/></svg></button>
+      <input id="radar-time" type="range" min="0" max="0" value="0" step="1">
+      <span id="radar-label"></span>
+    </div>
+    <div id="radar-foot" hidden>
+      <div id="radar-zoom"></div>
+      <div id="radar-legend"></div>
+    </div>
+  </section>
+
+  <section id="hours" class="card">
+    <h2></h2>
+    <div id="hours-list"></div>
+  </section>
+
+  <section id="days" class="card">
+    <h2></h2>
+    <div id="days-list"></div>
+  </section>
+
+  <footer id="sources"></footer>
+</main>
+
+<section id="intro" hidden>
+  <svg class="big"><use href="#i-weather"/></svg>
+  <h1></h1>
+  <p></p>
+  <button id="intro-mine" type="button" class="primary"></button>
+  <button id="intro-search" type="button" class="plain"></button>
+</section>
+
+<section id="trouble" hidden>
+  <svg class="big"><use href="#i-offline"/></svg>
+  <p></p>
+  <button id="retry" type="button" class="primary"></button>
+</section>
+
+<!--DATA-->
+<script src="app-weather-map.js"></script>
+<script src="apps.js"></script>
+<script src="app-weather.js"></script>
+</body>
+</html>

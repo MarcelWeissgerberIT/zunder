@@ -1,0 +1,8 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="#fff" />
+  <g id="calendar" fill="none" stroke="#000" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="146" y="234" width="732" height="660" rx="102" />
+    <path d="M146 414H878" />
+    <path d="M338 148V284M686 148V284" />
+  </g>
+</svg>
