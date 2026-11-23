@@ -74,7 +74,9 @@
     "play": "358e2c9e-ae07-4434-9228-1b5268e1da38",
     "pause": "4523d402-9b6b-4f44-87a6-2650f0e6650b",
     "timer": "323fcb75-8182-4712-a5d7-c27456400828",
-    "calendar": "64831526-b37e-4ba8-8767-64a45cf2364f"
+    "calendar": "64831526-b37e-4ba8-8767-64a45cf2364f",
+    "board": "d64633f0-2ecb-413d-914a-5f54cc383a96",
+    "grip": "f1cadb4e-068b-4f3f-a93d-c9df4df0bd35"
   },
   "wallpapers": {
     "source": "Higgsfield – Standbild: gpt_image_2_6 (2k, 16:9), Bewegung: wan3_0 (8 s, 1080p, Standbild als erstes und letztes Bild)",

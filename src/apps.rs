@@ -139,6 +139,23 @@ pub const APPS: &[App] = &[
         scans: false,
         requests: true,
     },
+    // Aufgaben: Todos und Notizen auf Kanban-Boards. Rein lokal, kein Netz.
+    App {
+        id: "tasks",
+        name: "app_tasks",
+        about: "app_tasks_about",
+        icon: "board",
+        page: "app-tasks.html",
+        files: &["apps.css", "apps.js", "app-tasks.css", "app-tasks.js"],
+        connect: &[],
+        images: &[],
+        location: false,
+        records: 20_000,
+        // Ein Board als Markdown-Checkliste.
+        exports: &["md"],
+        scans: false,
+        requests: false,
+    },
 ];
 
 /// So groß ist der Zettel einer App höchstens (Bytes). Mehr passte auch nicht
@@ -633,6 +650,7 @@ mod tests {
             ("app-time.js", include_str!("../ui/app-time.js")),
             ("app-security.js", include_str!("../ui/app-security.js")),
             ("app-request.js", include_str!("../ui/app-request.js")),
+            ("app-tasks.js", include_str!("../ui/app-tasks.js")),
         ];
         for (name, script) in scripts {
             let keys = text_keys(script);
@@ -673,6 +691,10 @@ mod tests {
         assert!(inspector.requests && inspector.connect.is_empty() && !inspector.scans);
         assert!(!security.requests && !by_id("weather").unwrap().requests);
         assert_eq!(url_of("request"), "zunder://app-request/");
+        // Aufgaben: lokal, mit Karteikarten und Markdown-Export, ohne Netz/Abruf.
+        let tasks = by_id("tasks").unwrap();
+        assert!(tasks.records > 0 && tasks.exports == ["md"] && !tasks.scans && !tasks.requests && tasks.connect.is_empty());
+        assert_eq!(url_of("tasks"), "zunder://app-tasks/");
         // Dateien sichert nur die Zeiterfassung – als Tabelle, sonst nichts.
         assert!(may_export(time, "zeiten-2026-11.csv") && may_export(time, "ZEITEN.CSV"));
         for name in ["zeiten.html", "zeiten.csv.app", "zeiten.command", "zeiten", "csv"] {

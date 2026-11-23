@@ -1,0 +1,11 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+  <rect width="1024" height="1024" fill="#fff" />
+  <g id="drag-handle" fill="#000">
+    <circle cx="380" cy="298" r="76" />
+    <circle cx="644" cy="298" r="76" />
+    <circle cx="380" cy="512" r="76" />
+    <circle cx="644" cy="512" r="76" />
+    <circle cx="380" cy="726" r="76" />
+    <circle cx="644" cy="726" r="76" />
+  </g>
+</svg>

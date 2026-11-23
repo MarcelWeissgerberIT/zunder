@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title></title>
+<link rel="stylesheet" href="apps.css">
+<link rel="stylesheet" href="app-tasks.css">
+</head>
+<body>
+<!--ICONS-->
+<header id="bar">
+  <div id="boards"></div>
+  <div id="bar-right">
+    <div id="view" class="segmented"></div>
+    <button id="export" type="button" class="ghost"></button>
+  </div>
+</header>
+
+<p id="private-note" class="banner" hidden></p>
+<p id="trouble" class="banner" hidden><span id="trouble-text"></span> <button id="trouble-retry" type="button" class="ghost"></button></p>
+
+<main>
+  <div id="view-board" class="board" hidden></div>
+  <div id="view-list" class="list" hidden></div>
+  <p id="empty" class="empty" hidden></p>
+</main>
+
+<!-- Karten-Editor -->
+<section id="editor" class="sheet" hidden>
+  <form class="sheet-box">
+    <header>
+      <div id="ed-kind" class="segmented"></div>
+      <button id="ed-close" type="button" class="round"><svg><use href="#i-close"/></svg></button>
+    </header>
+    <input id="ed-title" type="text" autocomplete="off">
+    <textarea id="ed-note" rows="4" spellcheck="false"></textarea>
+    <div class="ed-row">
+      <label id="ed-due-label" for="ed-due"></label>
+      <input id="ed-due" type="date">
+      <span id="ed-colors"></span>
+    </div>
+    <div class="ed-actions">
+      <button id="ed-delete" type="button" class="ghost"></button>
+      <span class="spacer"></span>
+      <button id="ed-cancel" type="button" class="ghost"></button>
+      <button id="ed-save" type="submit" class="primary"></button>
+    </div>
+  </form>
+</section>
+
+<!-- Board-Menü -->
+<div id="board-menu" class="menu" hidden></div>
+
+<div id="toast" hidden>
+  <span id="toast-text"></span>
+  <button id="toast-undo" type="button"></button>
+</div>
+
+<!--DATA-->
+<script src="apps.js"></script>
+<script src="app-tasks.js"></script>
+</body>
+</html>

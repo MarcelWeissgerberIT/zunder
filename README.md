@@ -74,10 +74,10 @@ Damit läuft das heutige Web vollständig, und die App startet sofort.
   „Erneut versuchen“, Rückfrage vor dem Öffnen anderer Programme.
 - Hell und dunkel nach Systemeinstellung, Oberfläche deutsch oder englisch.
 - **Eingebaute Apps**: eigene Seiten des Browsers mit genau benannten Rechten.
-  Es gibt vier: Wetter und Regenradar, eine Zeiterfassung (⌥⌘Z), ein
-  Sicherheitscheck, der die Schutzschichten einer Website prüft, und ein
-  Request-Inspektor für HTTP-Anfragen – beides, um die eigenen Seiten und
-  Schnittstellen zu härten (siehe [Eingebaute Apps](#eingebaute-apps)).
+  Es gibt fünf: Wetter und Regenradar, eine Zeiterfassung (⌥⌘Z), ein
+  Sicherheitscheck und ein Request-Inspektor (um die eigenen Seiten und
+  Schnittstellen zu härten) und Aufgaben auf Kanban-Boards (⌥⌘K)
+  (siehe [Eingebaute Apps](#eingebaute-apps)).
 - **Ladebild beim Start**: fünf Sekunden Animation – das App-Symbol „zündet“
   vor der Glut-Szene der Live-Hintergründe, der Schriftzug setzt sich, ein
   Balken füllt sich. Die Seiten laden währenddessen schon; ein Klick oder ein
@@ -636,9 +636,9 @@ sich dann wie mit ihr.)
 
 Eine App ist eine eigene Seite des Browsers in einem Tab – `zunder://app-…/` –,
 geladen aus dem Programm selbst. Man öffnet sie über ihre Kachel auf der
-Startseite, über „Ablage“ im Menü oder über ihre Adresse. Es gibt vier:
-**Wetter und Regenradar**, die **Zeiterfassung**, den **Sicherheitscheck** und
-den **Request-Inspektor**.
+Startseite, über „Ablage“ im Menü oder über ihre Adresse. Es gibt fünf:
+**Wetter und Regenradar**, die **Zeiterfassung**, den **Sicherheitscheck**, den
+**Request-Inspektor** und **Aufgaben** (Kanban-Boards).
 
 ### Was eine App darf
 
@@ -862,6 +862,36 @@ Rumpf (vom Server als JSON zurückgespiegelt), eine Weiterleitung (nicht
 gefolgt, `Location` im Kopf), ein 404, die Fehlerfälle (leere/unerreichbare
 Adresse, zu große Anfrage), die Merkliste, privates und Stealth-Fenster.
 
+### Aufgaben
+
+Todos und Notizen auf **Kanban-Boards** (⌥⌘K). Jede Karte liegt in einer Spalte;
+ziehen verschiebt sie. Rein lokal – die App geht nicht ins Netz, und die Daten
+bleiben beim Browser auf dem Mac (wie die Zeiten der Zeiterfassung, überleben
+„Verlauf und Website-Daten löschen“).
+
+- **Karten:** eine Aufgabe (mit Haken) oder eine Notiz, dazu eine längere Notiz,
+  ein Fälligkeitsdatum, eine Farbe (markiert „wichtig“ mit einem Streifen).
+  Erledigtes ist durchgestrichen, Überfälliges rot hervorgehoben.
+- **Schnell eintippen:** In jeder Spalte legt eine Zeile eine Karte an. „!“
+  macht sie wichtig, ein Datumswort am Ende setzt das Datum („heute“, „morgen“
+  oder „23.12.“). Weitere Wochentage und alles Übrige stellt ein Klick auf die
+  Karte ein.
+- **Spalten und Boards:** Spalten umbenennen, hinzufügen, löschen (ihre Karten
+  wandern dann in die Nachbarspalte); mehrere Boards nebeneinander, jedes mit
+  eigenen Spalten. Zwei Ansichten: Board (Kanban) und Liste.
+- **Ziehen:** Karten lassen sich mit der Maus (oder per Finger) zwischen Spalten
+  und innerhalb einer Spalte umordnen.
+- **Rückgängig:** Löschen einer Karte oder eines Boards lässt sich zurücknehmen.
+- **Als Markdown sichern:** das aktuelle Board als Checkliste – Spalten als
+  Überschriften, Aufgaben als `- [ ]`/`- [x]`, Notizen in einem eigenen
+  Abschnitt. Im privaten Fenster merkt sich die App nichts.
+
+Geprüft im Probelauf: Karten per Schnelleingabe (samt „!“ und Datumswort),
+Haken setzen, Ziehen zwischen Spalten, Karte bearbeiten (Notiz, Farbe, Art),
+„Abbrechen“ verwirft, Listenansicht, Markdown-Export, zweites Board, privates
+Fenster (nichts gemerkt). Eine lange Notiz wird so weit gekürzt, dass die Karte
+in eine Karteikarte passt.
+
 ## Passwörter
 
 ![Vorschlag am Anmeldefeld](docs/zunder-passwoerter.png)
@@ -1039,7 +1069,7 @@ Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
   nur ein Eintrag von heute. Am Anfang und am
   Ende der Zeile liest sie Zahlen als Zeit: Aus „3-4 Leute anrufen“ wird eine
   Buchung von 3 bis 4 Uhr – die Vorschau zeigt es vor dem Buchen.
-- Es gibt vier eingebaute Apps; eine Schnittstelle für Apps von außen gibt
+- Es gibt fünf eingebaute Apps; eine Schnittstelle für Apps von außen gibt
   es nicht.
 - **Request-Inspektor:** Der Rumpf einer Anfrage ist klein (der Kanal der
   Seiten fasst höchstens ~4 KB je Nachricht); für große Hochladungen ist die
@@ -1196,6 +1226,7 @@ der Assistent bietet dann Ollama und Claude an.
 | `ui/app-time.*` | Die App „Zeiterfassung“ |
 | `ui/app-security.*` | Die App „Sicherheitscheck“ |
 | `ui/app-request.*` | Die App „Request-Inspektor“ |
+| `ui/app-tasks.*` | Die App „Aufgaben“ (Kanban-Boards; rein in der Oberfläche, ohne eigenen Rust-Teil) |
 
 Ein Fenster besteht aus einer WebView für den Rahmen (Tab-Leiste,
 Adressleiste, Seitenleisten), einer WebView je Tab und – sobald sie zum ersten
@@ -1334,7 +1365,7 @@ wo es sich nachstellen ließ, mit einem Versuch vorher und nachher belegt:
 ## Icons und Hintergründe
 
 Alle Icons wurden über Higgsfield generiert (Modell `gpt_image_2_6`): das
-App-Icon als Bild, die 71 Icons der Oberfläche und der eingebauten Apps als SVG. Die unveränderten
+App-Icon als Bild, die 73 Icons der Oberfläche und der eingebauten Apps als SVG. Die unveränderten
 Ergebnisse liegen in `assets/higgsfield-raw/`, die Auftragsnummern in
 `assets/icon-jobs.json`.
 
