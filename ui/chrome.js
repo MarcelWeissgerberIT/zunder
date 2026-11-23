@@ -644,6 +644,12 @@
     closeEverything();
     command('assistant');
   });
+  // TL;DR: öffnet den Assistenten und fasst die aktuelle Seite zusammen (⇧⌘J).
+  $('summarize').addEventListener('click', () => {
+    closeEverything();
+    command('assistant_summary');
+  });
+  $('summarize').title = S.m_assistant_summary;
   $('menu').addEventListener('click', () => (ui.menu === 'main' ? closeMenu() : openMainMenu()));
 
   let progressValue = 0;
