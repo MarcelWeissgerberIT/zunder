@@ -1929,6 +1929,51 @@ body.sheet #scrim {
   box-sizing: border-box;
 }
 
+/* Der Bericht am Schild: welche Domains gesperrt wurden. */
+.shl-t {
+  padding: 2px 11px 4px;
+  width: 310px;
+  box-sizing: border-box;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.shl {
+  margin: 0 5px 2px;
+  width: 300px;
+  box-sizing: border-box;
+  max-height: 188px;
+  overflow-y: auto;
+}
+
+.shlr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.shlr:hover {
+  background: var(--hover);
+}
+
+.shlr .h {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shlr .n {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 #reader.on,
 #translate.on {
   background: var(--hover);

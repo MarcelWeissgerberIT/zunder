@@ -415,6 +415,7 @@ const STRINGS: &[(&str, &str, &str)] = &[
     ("sh_off_title", "Auf dieser Website wird nichts gesperrt", "Nothing is blocked on this website"),
     ("sh_count", "{n} Abrufe auf dieser Seite gesperrt", "{n} requests blocked on this page"),
     ("sh_count_none", "Auf dieser Seite gab es bisher nichts zu sperren.", "Nothing to block on this page so far."),
+    ("sh_report", "Gesperrte Domains", "Blocked domains"),
     ("sh_off_text", "Werbung und Tracker laden hier wie in anderen Browsern.", "Ads and trackers load here as in other browsers."),
     ("sh_site", "Blocker auf {site}", "Blocker on {site}"),
     ("sh_note_on", "Funktioniert eine Seite nicht richtig, schalte den Blocker hier nur für sie ab. Die Seite lädt dann neu.", "If a page does not work properly, turn the blocker off here just for it. The page then reloads."),

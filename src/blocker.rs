@@ -327,6 +327,8 @@ struct Ads {
     tabs: HashMap<usize, TabAds>,
     /// Gesperrte Abrufe je Tab seit dem letzten Seitenwechsel.
     blocked: HashMap<usize, u32>,
+    /// Je Tab: welche Hosts wie oft gesperrt wurden – für den Bericht am Schild.
+    hosts: HashMap<usize, HashMap<String, u32>>,
     /// Der Zähler hat sich geändert, die Oberfläche weiß es noch nicht.
     blocked_pending: bool,
 }
@@ -519,8 +521,11 @@ pub unsafe fn site_changed(webview: *mut AnyObject, url: &str, reload: bool, by_
         };
         let fresh = reload || page_of(&tab.page) != page_of(url);
         tab.page = page_of(url).to_string();
-        if fresh && ads.blocked.remove(&key).is_some() {
-            ads.blocked_pending = true;
+        if fresh {
+            ads.hosts.remove(&key);
+            if ads.blocked.remove(&key).is_some() {
+                ads.blocked_pending = true;
+            }
         }
         let controller = controller_of(webview);
         sync_tab(&mut ads, key, controller, url, by_user);
@@ -575,25 +580,53 @@ pub fn keep_only(live: &HashSet<usize>) {
         ads.forced.retain(|key| live.contains(key));
         ads.tabs.retain(|key, _| live.contains(key));
         ads.blocked.retain(|key, _| live.contains(key));
+        ads.hosts.retain(|key, _| live.contains(key));
     });
 }
 
-/// WebKit meldet einen gesperrten Abruf. `true`: Die Oberfläche soll bald
-/// nachsehen (nur beim ersten seit dem letzten Nachsehen).
-pub fn count_blocked(key: usize) -> bool {
+/// WebKit meldet einen gesperrten Abruf von `host`. `true`: Die Oberfläche
+/// soll bald nachsehen (nur beim ersten seit dem letzten Nachsehen).
+pub fn count_blocked(key: usize, host: String) -> bool {
     ADS.with(|ads| {
         let mut ads = ads.borrow_mut();
         if !ads.tabs.contains_key(&key) {
             return false;
         }
-        let count = ads.blocked.entry(key).or_insert(0);
-        *count = count.saturating_add(1);
+        {
+            let count = ads.blocked.entry(key).or_insert(0);
+            *count = count.saturating_add(1);
+        }
+        if !host.is_empty() {
+            let hosts = ads.hosts.entry(key).or_default();
+            if let Some(seen) = hosts.get_mut(&host) {
+                *seen = seen.saturating_add(1);
+            } else if hosts.len() < 512 {
+                // Das Verzeichnis je Tab begrenzen, damit eine Seite den
+                // Speicher nicht sprengt – der Bericht zeigt ohnehin nur die
+                // obersten Hosts.
+                hosts.insert(host, 1);
+            }
+        }
         !std::mem::replace(&mut ads.blocked_pending, true)
     })
 }
 
 pub fn blocked(key: usize) -> u32 {
     ADS.with(|ads| ads.borrow().blocked.get(&key).copied().unwrap_or(0))
+}
+
+/// Die gesperrten Hosts dieses Tabs, nach Anzahl absteigend (bei Gleichstand
+/// alphabetisch). Der Bericht am Schild zeigt daraus die obersten.
+pub fn blocked_hosts(key: usize) -> Vec<(String, u32)> {
+    ADS.with(|ads| {
+        let ads = ads.borrow();
+        let Some(map) = ads.hosts.get(&key) else {
+            return Vec::new();
+        };
+        let mut list: Vec<(String, u32)> = map.iter().map(|(host, n)| (host.clone(), *n)).collect();
+        list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        list
+    })
 }
 
 pub fn blocked_pending() -> bool {

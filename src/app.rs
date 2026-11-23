@@ -2621,6 +2621,20 @@ impl App {
         };
         let bar = omnibox::bar_url(shown);
         let blocked = active.webview.as_ref().map(|webview| crate::blocker::blocked(native::key(webview))).unwrap_or(0);
+        // Der Bericht am Schild: die am häufigsten gesperrten Hosts dieser Seite.
+        let blocked_hosts: Vec<Value> = if blocked > 0 {
+            active
+                .webview
+                .as_ref()
+                .map(|webview| crate::blocker::blocked_hosts(native::key(webview)))
+                .unwrap_or_default()
+                .into_iter()
+                .take(16)
+                .map(|(host, n)| json!({ "host": host, "n": n }))
+                .collect()
+        } else {
+            Vec::new()
+        };
         // Die Adresse in drei Teilen: Die Adressleiste hebt den Teil hervor,
         // der sagt, wem die Seite gehört.
         let parts = crate::sites::display_parts(&bar);
@@ -2689,6 +2703,7 @@ impl App {
                     .and_then(|bar| crate::sites::domain_of(bar)),
                 "off": crate::blocker::site_off(&bar),
                 "count": blocked,
+                "hosts": blocked_hosts,
             },
         });
         let title = active.display_title();

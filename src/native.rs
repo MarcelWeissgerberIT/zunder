@@ -1551,9 +1551,11 @@ extern "C-unwind" fn rule_list_action(_this: Obj, _cmd: Sel, webview: Obj, ident
             return;
         }
         if ads {
-            // Werbung oder Tracker gesperrt: nur mitzählen – das Schild in der
-            // Adresszeile zeigt die Zahl.
-            if crate::blocker::count_blocked(webview as usize) {
+            // Werbung oder Tracker gesperrt: mitzählen und den Host vermerken –
+            // das Schild in der Adresszeile zeigt Zahl und Bericht.
+            let text: Obj = msg_send![url, absoluteString];
+            let host = crate::shield::host_of(&string_of(text));
+            if crate::blocker::count_blocked(webview as usize, host) {
                 emit(UserEvent::Wake);
             }
             return;

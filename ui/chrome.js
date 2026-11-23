@@ -1170,6 +1170,20 @@
     head.appendChild(text);
     box.appendChild(head);
 
+    // Der Bericht: welche Domains auf dieser Seite wie oft gesperrt wurden.
+    const hosts = !info.off && Array.isArray(info.hosts) ? info.hosts : [];
+    if (hosts.length) {
+      box.appendChild(el('div', 'shl-t', S.sh_report));
+      const list = el('div', 'shl');
+      for (const entry of hosts) {
+        const line = el('div', 'shlr');
+        line.appendChild(el('span', 'h', entry.host || ''));
+        line.appendChild(el('span', 'n', (entry.n || 0).toLocaleString()));
+        list.appendChild(line);
+      }
+      box.appendChild(list);
+    }
+
     const row = el('div', 'shr');
     row.appendChild(el('span', 'l', S.sh_site.replace('{site}', info.site || '')));
     const toggle = el('button', 'switch' + (info.off ? '' : ' on'));
