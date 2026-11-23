@@ -18,6 +18,7 @@
   let hasToken = false;
   let loading = false;
   const items = new Map(); // id (r-<ref>) → { ref, title, kind, status, project, slug, href, summary }
+  const settings = { view: 'list' }; // 'list' | 'board' (Spalten nach Status)
 
   function node(tag, className, content) {
     const element = document.createElement(tag);
@@ -69,17 +70,47 @@
     return '';
   }
 
+  function saveNote() {
+    Z.save({ v: 1, view: settings.view });
+  }
+
+  // Der Umschalter Liste | Board in der Kopfzeile.
+  function buildViewToggle() {
+    const view = $('view');
+    view.textContent = '';
+    for (const [key, label] of [['list', S.ib_view_list], ['board', S.ib_view_board]]) {
+      const button = node('button', settings.view === key ? 'on' : '', label);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        if (settings.view === key) return;
+        settings.view = key;
+        saveNote();
+        render();
+      });
+      view.appendChild(button);
+    }
+  }
+
   function render() {
-    const list = $('list');
-    list.textContent = '';
+    buildViewToggle();
     const all = [...items.values()];
     $('count').textContent = all.length ? text('ib_count', { n: all.length }) : '';
-    $('empty').hidden = all.length > 0 || loading;
-    if (!all.length) {
+    const empty = !all.length;
+    $('empty').hidden = !empty;
+    $('list').hidden = empty || settings.view !== 'list';
+    $('view-board').hidden = empty || settings.view !== 'board';
+    if (empty) {
       $('empty').textContent = loading ? S.ib_loading : S.ib_empty;
       return;
     }
-    // Nach Projekt gruppieren, Gruppen alphabetisch, innerhalb nach Ref absteigend.
+    if (settings.view === 'board') renderBoard(all);
+    else renderList(all);
+  }
+
+  // Liste: nach Projekt gruppiert, Gruppen alphabetisch, innerhalb Ref absteigend.
+  function renderList(all) {
+    const list = $('list');
+    list.textContent = '';
     const groups = new Map();
     for (const item of all) {
       const key = item.project || '–';
@@ -92,6 +123,36 @@
       const rows = groups.get(key).sort((a, b) => b.ref - a.ref);
       for (const item of rows) group.appendChild(itemEl(item));
       list.appendChild(group);
+    }
+  }
+
+  // Board: Spalten nach Status. Read-only – Klick öffnet den Vorgang im Tab, kein
+  // Ziehen (ein Statuswechsel wäre ein Schreibvorgang mit Atlas-Übergangsregeln).
+  const STATUS_ORDER = ['todo', 'backlog', 'unplanned', 'open', 'in progress', 'in review', 'review', 'blocked', 'done', 'closed'];
+  function statusRank(status) {
+    const at = STATUS_ORDER.indexOf(String(status || '').toLowerCase());
+    return at === -1 ? STATUS_ORDER.length : at;
+  }
+  function renderBoard(all) {
+    const wrap = $('view-board');
+    wrap.textContent = '';
+    const cols = new Map();
+    for (const item of all) {
+      const key = item.status || '–';
+      if (!cols.has(key)) cols.set(key, []);
+      cols.get(key).push(item);
+    }
+    const keys = [...cols.keys()].sort((a, b) => statusRank(a) - statusRank(b) || a.localeCompare(b));
+    for (const key of keys) {
+      const column = node('div', 'column');
+      const head = node('div', 'col-head');
+      head.appendChild(node('span', 'name', key));
+      head.appendChild(node('span', 'col-count', String(cols.get(key).length)));
+      column.appendChild(head);
+      const box = node('div', 'col-cards');
+      for (const item of cols.get(key).sort((a, b) => b.ref - a.ref)) box.appendChild(itemEl(item));
+      column.appendChild(box);
+      wrap.appendChild(column);
     }
   }
 
@@ -321,6 +382,9 @@
       const item = cacheClean(value);
       if (item) items.set(id, item);
     }
+    // Gemerkte Ansicht (Liste/Board) vom Zettel der App holen.
+    const note = await Z.load();
+    if (note.ok && note.value && note.value.view === 'board') settings.view = 'board';
     render();
     // Dann den Stand holen (Adresse + ob ein Token hinterlegt ist) und abrufen.
     const status = await Z.api({ action: 'status' });

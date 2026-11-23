@@ -284,6 +284,75 @@ main {
   margin-top: 2px;
 }
 
+/* ---- Umschalter und Board --------------------------------------------------- */
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--field);
+}
+
+.segmented button {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.segmented button.on {
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.board {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 12px;
+}
+
+.board .column {
+  flex: 0 0 290px;
+  max-width: 290px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: var(--col);
+  max-height: calc(100vh - 120px);
+}
+
+.board .col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 6px;
+}
+
+.board .col-head .name {
+  font-weight: 650;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.board .col-count {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.board .col-cards {
+  overflow-y: auto;
+  padding: 2px 8px 10px;
+}
+
+.board .col-cards .item {
+  background: var(--card);
+}
+
 /* ---- Einrichtung (Blatt) ---------------------------------------------------- */
 
 .sheet {

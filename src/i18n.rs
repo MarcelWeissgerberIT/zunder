@@ -566,6 +566,8 @@ const STRINGS: &[(&str, &str, &str)] = &[
     ("ib_title", "Posteingang", "Inbox"),
     ("ib_refresh", "Aktualisieren", "Refresh"),
     ("ib_settings", "Einstellungen", "Settings"),
+    ("ib_view_list", "Liste", "List"),
+    ("ib_view_board", "Board", "Board"),
     ("ib_count", "{n} offen", "{n} open"),
     ("ib_loading", "Lädt …", "Loading…"),
     ("ib_empty", "Nichts Offenes.", "Nothing open."),
