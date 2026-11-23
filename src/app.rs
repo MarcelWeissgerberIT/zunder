@@ -1543,7 +1543,7 @@ impl App {
                     .with_position(LogicalPosition::new(f.x, f.y));
             }
             None => {
-                builder = builder.with_inner_size(LogicalSize::new(1280.0, 860.0));
+                builder = builder.with_inner_size(LogicalSize::new(1400.0, 860.0));
                 // Neue Fenster leicht versetzt zum aktuellen öffnen.
                 if let Some(current) = self.focused().and_then(|id| self.windows.get(&id)) {
                     if let Ok(position) = current.window.outer_position() {
