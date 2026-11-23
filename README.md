@@ -662,9 +662,9 @@ Mehr als eine Webseite, aber nur, was für sie eingetragen ist
   Browsers wie die Lesezeichen, nicht bei den Website-Daten: „Verlauf und
   Website-Daten löschen“ lässt es stehen.
 - **Dateien sichern:** nur Dateien, die die App selbst erzeugt, nur mit einer
-  Endung, die für sie eingetragen ist (die Zeiterfassung: `csv`), und nur über
-  den gewöhnlichen Weg der Downloads – in den Download-Ordner, ohne eine
-  vorhandene Datei zu überschreiben.
+  Endung, die für sie eingetragen ist (die Zeiterfassung: `csv`, der
+  Sicherheitscheck: `md`), und nur über den gewöhnlichen Weg der Downloads – in
+  den Download-Ordner, ohne eine vorhandene Datei zu überschreiben.
 - **Abrufen:** Nur der Sicherheitscheck darf den Browser bitten, eine Adresse
   abzurufen und zu prüfen. Den Abruf macht der Browser selbst (`src/security.rs`),
   nie die Seite der App; im Stealth-Fenster gar nicht.
@@ -806,6 +806,10 @@ Abruf zeigt. Zu jedem Fund steht, wie man ihn behebt.
   CORS fremde Herkünfte wahllos (und mit Anmeldung) zulässt, ob bekannte Pfade
   wie `/.git/config` oder `/.env` offen liegen, ob der Server Ordnerinhalte
   auflistet, und ob `Cross-Origin-Opener-Policy` und `Permissions-Policy` fehlen.
+- **Zum Weiterarbeiten:** Die Befunde lassen sich als Markdown sichern – nach
+  Stufen geordnet, das Ernste und die Schwächen als Checkliste zum Abhaken, zu
+  jedem Punkt die Behebung. So kann man die eigenen Seiten (oder Apps) Stelle
+  für Stelle überarbeiten.
 - **Gefahrlos:** Es werden nur **Abrufe** gemacht (GET) – nichts eingeschleust,
   nichts erraten-durchprobiert, keine Last erzeugt. Die „aktiven“ Prüfungen
   rufen eine Handvoll bekannter Pfade ab und sehen nach, ob eine Adresse

@@ -110,7 +110,8 @@ pub const APPS: &[App] = &[
         location: false,
         // Geprüfte Adressen merken.
         records: 500,
-        exports: &[],
+        // Die Schwachstellen als Markdown zum Weiterarbeiten.
+        exports: &["md"],
         scans: true,
     },
 ];
