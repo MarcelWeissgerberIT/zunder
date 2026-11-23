@@ -66,9 +66,16 @@ pub enum Action {
     Clear,
     /// Einen Pfad aus `PATHS` samt Abfragezeichenkette abrufen.
     Get { path: String, query: String },
+    /// Einen neuen Vorgang anlegen (`POST /api/ingest`); der Rumpf ist das
+    /// geprüfte Record-Objekt als Text.
+    Create { body: String },
     /// Unlesbar oder nicht erlaubt.
     Bad,
 }
+
+/// So groß darf der Rumpf eines neuen Vorgangs höchstens sein (Bytes) – er geht
+/// durch den engen Kanal der Seiten.
+const CREATE_MAX: usize = 3500;
 
 /// Liest die Bitte, wie die Seite sie schickt (`{"action":…}`), und macht sie
 /// sicher.
@@ -103,6 +110,18 @@ pub fn action(input: &str) -> Action {
                 None => Action::Bad,
             }
         }
+        Some("create") => match value.get("record").filter(|value| value.is_object()) {
+            Some(record) => {
+                let text = serde_json::to_string(record).unwrap_or_default();
+                let has_title = record.get("title").and_then(Value::as_str).is_some_and(|title| !title.trim().is_empty());
+                if has_title && !text.is_empty() && text.len() <= CREATE_MAX {
+                    Action::Create { body: text }
+                } else {
+                    Action::Bad
+                }
+            }
+            None => Action::Bad,
+        },
         _ => Action::Bad,
     }
 }
@@ -216,6 +235,41 @@ pub fn fetch(base: &str, path: &str, query: &str) -> Value {
     })
 }
 
+/// Legt einen neuen Vorgang an (`POST /api/ingest`) und liefert die rohe Antwort
+/// (`{ok, ref, href, project, slug}`). Wie `fetch`: nativ, Token aus dem
+/// Schlüsselbund, nie an die Seite; Ziel ist allein die gespeicherte Adresse.
+pub fn create(base: &str, body: &str) -> Value {
+    let Some(token) = token_get() else {
+        return json!({ "state": "no_token" });
+    };
+    let url = format!("{base}/api/ingest");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(8))
+        .timeout_read(Duration::from_secs(20))
+        .timeout_write(Duration::from_secs(8))
+        .timeout(Duration::from_secs(25))
+        .redirects(0)
+        .user_agent("Zunder/1.0 (Posteingang)")
+        .build();
+    let result = agent
+        .post(&url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Content-Type", "application/json")
+        .set("Accept", "application/json")
+        .send_string(body);
+    let response = match result {
+        Ok(response) => response,
+        Err(ureq::Error::Status(_, response)) => response,
+        Err(ureq::Error::Transport(_)) => return json!({ "state": "unreachable" }),
+    };
+    let status = response.status();
+    let mut raw: Vec<u8> = Vec::new();
+    let read = response.into_reader().take(BODY_MAX + 1).read_to_end(&mut raw);
+    raw.truncate(BODY_MAX as usize);
+    let body = if read.is_err() { String::new() } else { String::from_utf8_lossy(&raw).into_owned() };
+    json!({ "state": "ok", "status": status, "body": body })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +345,22 @@ mod tests {
         for bad in ["", "   ", "ftp://a.de", "https://u:p@a.de", "a.de", "not a url", "file:///etc"] {
             assert_eq!(clean_base(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn anlegen_prueft_titel_und_objekt() {
+        match action(r#"{"action":"create","record":{"title":"Neu","kind":"bug","project":"x"}}"#) {
+            Action::Create { body } => {
+                let value: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(value["title"], "Neu");
+                assert_eq!(value["kind"], "bug");
+            }
+            other => panic!("erwartet Create, war {other:?}"),
+        }
+        // Ohne Titel, leerer Titel, kein Objekt, gar nichts → abgelehnt.
+        assert_eq!(action(r#"{"action":"create","record":{"kind":"bug"}}"#), Action::Bad);
+        assert_eq!(action(r#"{"action":"create","record":{"title":"   "}}"#), Action::Bad);
+        assert_eq!(action(r#"{"action":"create","record":"x"}"#), Action::Bad);
+        assert_eq!(action(r#"{"action":"create"}"#), Action::Bad);
     }
 }

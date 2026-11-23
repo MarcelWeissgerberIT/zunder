@@ -362,6 +362,83 @@
   }
 
   // ------------------------------------------------------------------------
+  // Neuen Vorgang anlegen (POST /api/ingest über Z.api action:'create')
+  // ------------------------------------------------------------------------
+
+  const KINDS = ['feature', 'ticket', 'bug', 'task'];
+
+  function openCreate() {
+    const kind = $('cr-kind');
+    kind.textContent = '';
+    for (const value of KINDS) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      kind.appendChild(option);
+    }
+    kind.value = 'ticket';
+    // Projekt aus den bekannten Projekten; Standard „(erstes Projekt)" = der
+    // Server wählt (das Projekt bestimmt auch den Tenant).
+    const projects = [...new Set(baseItems().map((item) => item.project).filter(Boolean))].sort();
+    const sel = $('cr-project');
+    sel.textContent = '';
+    const first = document.createElement('option');
+    first.value = '';
+    first.textContent = S.ib_first_project;
+    sel.appendChild(first);
+    for (const value of projects) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      sel.appendChild(option);
+    }
+    sel.value = '';
+    $('cr-title').value = '';
+    $('cr-body').value = '';
+    $('cr-tags').value = '';
+    $('cr-status').textContent = '';
+    $('create').hidden = false;
+    setTimeout(() => $('cr-title').focus(), 0);
+  }
+
+  function closeCreate() {
+    $('create').hidden = true;
+  }
+
+  $('create-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const title = $('cr-title').value.trim();
+    if (!title) {
+      $('cr-status').textContent = S.ib_title_required;
+      return;
+    }
+    const record = { title, kind: $('cr-kind').value };
+    const project = $('cr-project').value;
+    if (project) record.project = project;
+    const body = $('cr-body').value.trim();
+    if (body) record.body = body;
+    const tags = $('cr-tags').value.split(',').map((tag) => tag.trim()).filter(Boolean);
+    if (tags.length) record.tags = tags;
+    if (settings.me) record.actor = settings.me;
+    $('cr-status').textContent = S.ib_loading;
+    const answer = await Z.api({ action: 'create', record });
+    if (answer.state === 'ok' && answer.status >= 200 && answer.status < 300) {
+      closeCreate();
+      toast(S.ib_created);
+      loadInbox();
+    } else if (answer.status === 401 || answer.status === 403) {
+      $('cr-status').textContent = S.ib_no_access;
+    } else {
+      $('cr-status').textContent = S.ib_create_failed;
+    }
+  });
+  $('cr-close').addEventListener('click', closeCreate);
+  $('cr-cancel').addEventListener('click', closeCreate);
+  $('create').addEventListener('click', (event) => {
+    if (event.target === $('create')) closeCreate();
+  });
+
+  // ------------------------------------------------------------------------
   // Banner und Meldung
   // ------------------------------------------------------------------------
 
@@ -535,6 +612,7 @@
     if (event.target === $('preview')) closePreview();
   });
   $('settings-btn').addEventListener('click', openSetup);
+  $('new-btn').addEventListener('click', openCreate);
   $('refresh').addEventListener('click', loadInbox);
   $('q').addEventListener('input', () => {
     clearTimeout(filterTimer);
@@ -560,7 +638,8 @@
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    if (!$('preview').hidden) closePreview();
+    if (!$('create').hidden) closeCreate();
+    else if (!$('preview').hidden) closePreview();
     else if (!$('setup').hidden) closeSetup();
   });
 
@@ -579,6 +658,15 @@
   $('f-mine').textContent = S.ib_mine;
   $('me-label').textContent = S.ib_me_label;
   $('me-hint').textContent = S.ib_me_hint;
+  $('new-btn').textContent = S.ib_new;
+  $('cr-heading').textContent = S.ib_new_title;
+  $('cr-title-label').textContent = S.ib_f_title;
+  $('cr-kind-label').textContent = S.ib_kind;
+  $('cr-project-label').textContent = S.ib_project;
+  $('cr-body-label').textContent = S.ib_f_body;
+  $('cr-tags-label').textContent = S.ib_f_tags;
+  $('cr-cancel').textContent = S.ib_cancel;
+  $('cr-save').textContent = S.ib_create;
   $('setup-title').textContent = S.ib_setup_title;
   $('setup-hint').textContent = S.ib_setup_hint;
   $('server-label').textContent = S.ib_server_label;

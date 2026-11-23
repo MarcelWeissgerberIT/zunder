@@ -965,6 +965,28 @@ impl App {
                                 self.app_reply(window, tab_id, app.id, n, json!({ "state": "no_base" }));
                             }
                         }
+                        // Einen neuen Vorgang anlegen (POST). Wie Get: Adresse hier,
+                        // Abruf im Hintergrund. Auch im privaten Fenster erlaubt (ein
+                        // Server-Schreiben, kein lokaler Stand); im Stealth gesperrt (oben).
+                        Action::Create { body } => {
+                            let base = self.store.try_setting(crate::inbox::BASE_KEY).ok().flatten().filter(|base| !base.is_empty());
+                            if let Some(base) = base {
+                                if !crate::inbox::begin() {
+                                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "busy" }));
+                                } else {
+                                    let (proxy, id) = (self.proxy.clone(), app.id);
+                                    std::thread::spawn(move || {
+                                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::inbox::create(&base, &body)))
+                                            .unwrap_or_else(|_| json!({ "state": "failed" }));
+                                        crate::inbox::finish();
+                                        let _ = proxy.send_event(crate::app::UserEvent::Api { window, tab: tab_id, app: id, n, result });
+                                    });
+                                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "loading" }));
+                                }
+                            } else {
+                                self.app_reply(window, tab_id, app.id, n, json!({ "state": "no_base" }));
+                            }
+                        }
                     }
                 }
             }

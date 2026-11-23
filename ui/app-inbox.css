@@ -450,6 +450,43 @@ main {
   background: var(--field);
 }
 
+.sheet-box textarea {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+
+.sheet-box select {
+  height: 36px;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  color: inherit;
+  font: inherit;
+}
+
+.cr-row {
+  display: flex;
+  gap: 10px;
+}
+
+.cr-row > div {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cr-row select {
+  width: 100%;
+}
+
 .hint {
   color: var(--muted);
   font-size: 12px;
