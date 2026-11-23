@@ -101,6 +101,9 @@ fn embedded(name: &str) -> Option<&'static [u8]> {
         "app-time.html" => ui!("app-time.html"),
         "app-time.css" => ui!("app-time.css"),
         "app-time.js" => ui!("app-time.js"),
+        "app-security.html" => ui!("app-security.html"),
+        "app-security.css" => ui!("app-security.css"),
+        "app-security.js" => ui!("app-security.js"),
         _ => return None,
     })
 }

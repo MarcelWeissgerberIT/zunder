@@ -74,9 +74,10 @@ Damit läuft das heutige Web vollständig, und die App startet sofort.
   „Erneut versuchen“, Rückfrage vor dem Öffnen anderer Programme.
 - Hell und dunkel nach Systemeinstellung, Oberfläche deutsch oder englisch.
 - **Eingebaute Apps**: eigene Seiten des Browsers mit genau benannten Rechten.
-  Es gibt zwei: Wetter und Regenradar – mit eigenem Standort oder
-  Postleitzahl – und eine Zeiterfassung, in der man Zeiten in einer Zeile
-  bucht (⌥⌘Z) und deren Daten beim Browser auf dem Mac bleiben
+  Es gibt drei: Wetter und Regenradar – mit eigenem Standort oder Postleitzahl –,
+  eine Zeiterfassung, in der man Zeiten in einer Zeile bucht (⌥⌘Z) und deren
+  Daten beim Browser auf dem Mac bleiben, und einen Sicherheitscheck, der die
+  Schutzschichten einer Website prüft – damit man die eigenen Seiten härten kann
   (siehe [Eingebaute Apps](#eingebaute-apps)).
 - **Ladebild beim Start**: fünf Sekunden Animation – das App-Symbol „zündet“
   vor der Glut-Szene der Live-Hintergründe, der Schriftzug setzt sich, ein
@@ -636,8 +637,8 @@ sich dann wie mit ihr.)
 
 Eine App ist eine eigene Seite des Browsers in einem Tab – `zunder://app-…/` –,
 geladen aus dem Programm selbst. Man öffnet sie über ihre Kachel auf der
-Startseite, über „Ablage“ im Menü oder über ihre Adresse. Es gibt zwei:
-**Wetter und Regenradar** und die **Zeiterfassung**.
+Startseite, über „Ablage“ im Menü oder über ihre Adresse. Es gibt drei:
+**Wetter und Regenradar**, die **Zeiterfassung** und den **Sicherheitscheck**.
 
 ### Was eine App darf
 
@@ -664,6 +665,9 @@ Mehr als eine Webseite, aber nur, was für sie eingetragen ist
   Endung, die für sie eingetragen ist (die Zeiterfassung: `csv`), und nur über
   den gewöhnlichen Weg der Downloads – in den Download-Ordner, ohne eine
   vorhandene Datei zu überschreiben.
+- **Abrufen:** Nur der Sicherheitscheck darf den Browser bitten, eine Adresse
+  abzurufen und zu prüfen. Den Abruf macht der Browser selbst (`src/security.rs`),
+  nie die Seite der App; im Stealth-Fenster gar nicht.
 
 Laden kann eine App allein der Browser – nie eine Webseite, weder im Tab noch
 in einem Rahmen oder einem neuen Fenster. Die Anmeldung, mit der der Browser
@@ -778,6 +782,52 @@ sofort bucht oder stoppt), privates Fenster (nichts gelesen, nichts abgelegt,
 nichts verloren beim Tabwechsel), die Tabelle samt Namen der Datei – und dass eine
 Webseite weder an die Karteikarten kommt noch die App lädt, auch nicht, wenn
 sie es im selben Augenblick versucht, in dem der Browser sie öffnet.
+
+### Sicherheitscheck
+
+Gedacht, damit man die **eigenen** Seiten härten kann: Man gibt die Adresse
+einer Website ein, und Zunder prüft, welche Schutzschichten ihr fehlen. Anders
+als der Seitencheck (⌥⌘S), der nur auswertet, was beim gewöhnlichen Laden
+ohnehin anfällt, ruft diese App eine Adresse **eigens** ab – so liest Zunder den
+ganzen Antwortkopf, die Cookies und den Quelltext, mehr als eine Seite im Tab
+über sich preisgibt.
+
+Abgerufen wird vom Browser selbst (`src/security.rs`), nicht von der Seite der
+App: Die geht gar nicht ins Netz. Die Bewertung ist dieselbe wie hinter der
+Security-Ampel (`src/sitecheck.rs`), um Befunde ergänzt, die erst der eigene
+Abruf zeigt. Zu jedem Fund steht, wie man ihn behebt.
+
+- **Was geprüft wird:** Verschlüsselung und HSTS, Schutz vor eingeschleustem
+  Code (CSP), Einbetten in fremde Seiten (`X-Frame-Options`/`frame-ancestors`),
+  Merkmale der Sitzungs-Cookies (`Secure`, `HttpOnly`, `SameSite`), unverschlüsselt
+  geladene Teile, Skripte von fremden Rechnern und Sammelstellen ohne Prüfsumme,
+  veraltete Bibliotheken, was die Seite über ihre Software verrät. Dazu, was erst
+  der eigene Abruf sichtbar macht: ob `http` von selbst auf `https` führt, ob
+  CORS fremde Herkünfte wahllos (und mit Anmeldung) zulässt, ob bekannte Pfade
+  wie `/.git/config` oder `/.env` offen liegen, ob der Server Ordnerinhalte
+  auflistet, und ob `Cross-Origin-Opener-Policy` und `Permissions-Policy` fehlen.
+- **Gefahrlos:** Es werden nur **Abrufe** gemacht (GET) – nichts eingeschleust,
+  nichts erraten-durchprobiert, keine Last erzeugt. Die „aktiven“ Prüfungen
+  rufen eine Handvoll bekannter Pfade ab und sehen nach, ob eine Adresse
+  umleitet und wie sie beim Teilen antwortet. Das tut jeder Sicherheits-Scanner;
+  einen Angriff stellt es nicht dar. Einschleusen (XSS, SQL), das Durchprobieren
+  von Passwörtern und Lastangriffe gehören bewusst **nicht** dazu: Solche
+  Nutzlasten wirken gegen jede fremde Seite gleich, und die App kann nicht
+  prüfen, wem eine Adresse gehört. Fürs Härten braucht es sie nicht.
+- **Grenzen:** Im Stealth-Fenster prüft die App nichts – der eigene Abruf ginge
+  am Tunnel vorbei und verriete die echte Adresse. Im eigenen Netz
+  (`localhost` …) entfallen die Prüfungen, die nur im offenen Netz Sinn ergeben
+  (offene Dateien, `http`→`https`, die Trennschichten). Geprüfte Adressen merkt
+  sich die App (bis zu zwölf), im privaten Fenster nicht. Was im Programm einer
+  Website steckt, sieht von außen niemand – die App prüft die Schutzschichten,
+  nicht den Code dahinter.
+
+Geprüft im Probelauf gegen einen eigens gebauten Server: eine schwache Seite
+(rot, mit CORS-Freigabe an jede Herkunft, fehlender CSP, Einbettbarkeit,
+veralteter Bibliothek, Cookie ohne Schutz) und eine solide (grün); dazu die
+Fehlerfälle (keine Web-Adresse, nicht erreichbar), die Merkliste, privates und
+Stealth-Fenster, und einmal eine echte Adresse (`example.com`), um den Abruf im
+offenen Netz zu bestätigen.
 
 ## Passwörter
 
@@ -956,8 +1006,14 @@ Auf einem MacBook Pro (Apple Silicon, macOS 26) mit lokalen Testseiten:
   nur ein Eintrag von heute. Am Anfang und am
   Ende der Zeile liest sie Zahlen als Zeit: Aus „3-4 Leute anrufen“ wird eine
   Buchung von 3 bis 4 Uhr – die Vorschau zeigt es vor dem Buchen.
-- Es gibt zwei eingebaute Apps; eine Schnittstelle für Apps von außen gibt
+- Es gibt drei eingebaute Apps; eine Schnittstelle für Apps von außen gibt
   es nicht.
+- **Sicherheitscheck:** Er prüft die Schutzschichten von außen, nicht das
+  Programm hinter der Website – eingeschleust, durchprobiert oder belastet wird
+  nichts. Die Fassung der TLS-Verbindung liest er nicht (ob also noch TLS 1.0/1.1
+  erlaubt ist, sagt er nicht). Im eigenen Netz entfallen die Prüfungen fürs
+  offene Netz. Prüfe nur Seiten, die dir gehören oder für die du die Erlaubnis
+  hast.
 - **Dateinamen aus dem Link:** Erzeugt eine Website eine Datei selbst und
   gibt ihr über den Link einen Namen (`download="bericht.csv"` an einer
   `blob:`-Adresse), heißt sie in der abgeschotteten App trotzdem „Unknown“
@@ -1077,7 +1133,8 @@ der Assistent bietet dann Ollama und Claude an.
 | `src/translate.rs` | Seiten übersetzen: Sätze bündeln, Portionen ans Modell, Antworten einsetzen |
 | `src/sitecheck.rs` | Seitencheck hinter der Security-Ampel: Auswertung von Antwortkopf, Aufbau und Cookies |
 | `src/media.rs` | Kamera und Mikrofon je Website: wann gefragt, erlaubt oder abgelehnt wird (die Frage selbst stellt `src/native.rs`) |
-| `src/apps.rs` | Eingebaute Apps: welche es gibt, was jede darf (Netz, Standort, Speicher, Dateien sichern), ihre Adressen und Anfragen |
+| `src/apps.rs` | Eingebaute Apps: welche es gibt, was jede darf (Netz, Standort, Speicher, Dateien sichern, Abrufen), ihre Adressen und Anfragen |
+| `src/security.rs` | Sicherheitscheck: eine Adresse abrufen, den Quelltext lesen und – mit `sitecheck` – bewerten; dazu ein paar gefahrlose aktive Prüfungen |
 | `src/geo.rs` | Standort von macOS für eingebaute Apps – nie für Webseiten |
 | `src/pdfs.rs` | Eingebettete PDFs, die WebKit leer lässt: was der Browser annimmt, aufbewahrt und wieder herausgibt – und wann er einen Download absagt, den WebKit für ein eingebettetes PDF von sich aus beginnt (die Stellen selbst stehen in `src/native.rs`) |
 | `src/bookmarks_io.rs` | Lesezeichen aus anderen Browsern übernehmen und sichern |
@@ -1095,6 +1152,7 @@ der Assistent bietet dann Ollama und Claude an.
 | `ui/apps.js`, `ui/apps.css` | Gemeinsamer Teil der eingebauten Apps: der Draht zum Browser |
 | `ui/app-weather.*` | Die App „Wetter und Regenradar“ samt der Städteliste für das Radar |
 | `ui/app-time.*` | Die App „Zeiterfassung“ |
+| `ui/app-security.*` | Die App „Sicherheitscheck“ |
 
 Ein Fenster besteht aus einer WebView für den Rahmen (Tab-Leiste,
 Adressleiste, Seitenleisten), einer WebView je Tab und – sobald sie zum ersten
@@ -1331,7 +1389,7 @@ in fester Form zeigen), die Regeln zu Kamera und Mikrofon (wann gefragt,
 erlaubt oder abgelehnt wird, wie lange ein Nein hält, unter welchem Namen
 sich Zunder eine Website merkt) und die Regeln für eingebettete PDFs (wer
 abliefern darf, was als PDF gilt, wer es wieder bekommt, was wann weicht –
-und welcher Download als ungefragt gilt – sowie die eingebauten Apps (Adressen, Schutzregel, Anfragen, Karteikarten, Dateinamen, Rundung des Standorts, Übersetzung aller Texte; 131 Tests).
+und welcher Download als ungefragt gilt – sowie die eingebauten Apps (Adressen, Schutzregel, Anfragen, Karteikarten, Dateinamen, Rundung des Standorts, Dateinamen, Abruf-Freigabe, Übersetzung aller Texte; dazu der Sicherheitscheck, der eine Seite abruft, ihren Quelltext liest und bewertet; 137 Tests).
 
 Der Name „Zunder“ ist ein Arbeitstitel. Er steht in `Cargo.toml`,
 `scripts/bundle.sh`, `src/menu.rs`, `src/i18n.rs` und im Schema `zunder://`.

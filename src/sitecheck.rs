@@ -182,7 +182,13 @@ impl Finding {
         Finding { level, id, args: Vec::new() }
     }
 
-    fn with(mut self, key: &'static str, value: impl Into<String>) -> Self {
+    /// Ein Befund für die Nachbarn dieser Datei (`security.rs`): dieselbe Form,
+    /// damit die Oberfläche nichts davon merkt, dass er aus einem eigenen Abruf stammt.
+    pub fn note(level: Level, id: &'static str) -> Self {
+        Finding::new(level, id)
+    }
+
+    pub fn with(mut self, key: &'static str, value: impl Into<String>) -> Self {
         self.args.push((key, value.into()));
         self
     }

@@ -121,6 +121,14 @@
       return true;
     },
 
+    // Bittet den Browser, eine Adresse abzurufen und auf Sicherheit zu prüfen
+    // (nur der Sicherheitscheck darf das). `progress` erfährt den Zwischenstand
+    // 'scanning'. Die Antwort trägt den Befund oder warum nicht ('bad_url',
+    // 'unreachable', 'refused', 'timeout').
+    scan(url, progress) {
+      return call('scan', { url }, { timeout: 60000, progress, done: (answer) => answer.state !== 'scanning' });
+    },
+
     // Die Karteikarten der App (wo für sie welche eingetragen sind): viele
     // kleine Einträge, jeder ein Objekt unter seiner Kennung aus Buchstaben,
     // Ziffern, „-“ und „_“.

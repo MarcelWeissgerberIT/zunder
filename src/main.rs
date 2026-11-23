@@ -26,6 +26,7 @@ mod pages;
 mod pdfs;
 mod reader;
 mod shield;
+mod security;
 mod sitecheck;
 mod sites;
 mod stealth;

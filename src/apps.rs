@@ -49,6 +49,10 @@ pub struct App {
     /// Dateien, die sie selbst erzeugt und bei den Downloads sichert, dürfen so
     /// enden (ohne Punkt, klein). Leer: Sie sichert keine.
     pub exports: &'static [&'static str],
+    /// Darf sie den Browser bitten, eine Adresse abzurufen und zu prüfen? Nur
+    /// der Sicherheitscheck. Der Abruf macht der Browser (`security.rs`), nie
+    /// die Seite der App.
+    pub scans: bool,
 }
 
 pub const APPS: &[App] = &[
@@ -73,6 +77,7 @@ pub const APPS: &[App] = &[
         location: true,
         records: 0,
         exports: &[],
+        scans: false,
     },
     // Zeiterfassung: Sie geht gar nicht ins Netz. Was gebucht ist, liegt als
     // Karteikarten beim Browser – genug für viele Jahre.
@@ -89,6 +94,24 @@ pub const APPS: &[App] = &[
         records: 20_000,
         // Die Zeiten als Tabelle.
         exports: &["csv"],
+        scans: false,
+    },
+    // Sicherheitscheck: ruft eine Adresse ab und prüft sie – damit man die
+    // eigenen Seiten härten kann. Der Abruf macht der Browser, nicht die Seite.
+    App {
+        id: "security",
+        name: "app_security",
+        about: "app_security_about",
+        icon: "shield",
+        page: "app-security.html",
+        files: &["apps.css", "apps.js", "app-security.css", "app-security.js"],
+        connect: &[],
+        images: &[],
+        location: false,
+        // Geprüfte Adressen merken.
+        records: 500,
+        exports: &[],
+        scans: true,
     },
 ];
 
@@ -229,6 +252,8 @@ pub enum Op {
     /// Ankündigen, wie die Datei heißt, die sie gleich selbst erzeugt und
     /// sichert (`ui/apps.js`, `saveFile`).
     FileName(String),
+    /// Den Browser bitten, eine Adresse abzurufen und auf Sicherheit zu prüfen.
+    Scan(String),
 }
 
 /// Eine Anfrage: laufende Nummer (unter der die Antwort zurückkommt) und Wunsch.
@@ -273,6 +298,7 @@ fn wish(value: &Value) -> Option<Op> {
         "put" => Op::Put { id: record_id(text("id")?)?, data: object_text(text("data")?, RECORD_MAX)? },
         "remove" => Op::Remove(record_id(text("id")?)?),
         "filename" => Op::FileName(file_name(text("name")?)?),
+        "scan" => Op::Scan(scan_target(text("url")?)?),
         _ => return None,
     })
 }
@@ -282,6 +308,13 @@ fn wish(value: &Value) -> Option<Op> {
 fn object_text(data: &str, max: usize) -> Option<String> {
     let object = data.len() <= max && serde_json::from_str::<Value>(data).is_ok_and(|parsed| parsed.is_object());
     object.then(|| data.to_string())
+}
+
+/// Die Adresse, die der Sicherheitscheck prüfen soll: nicht leer, nicht
+/// übermäßig lang. Geprüft wird sie erst beim Abruf (`security::scan`).
+fn scan_target(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    (!trimmed.is_empty() && trimmed.len() <= 2_000).then(|| trimmed.to_string())
 }
 
 /// Der Name einer Datei, die eine App sichert: kurz, aus harmlosen Zeichen, mit
@@ -495,6 +528,14 @@ mod tests {
             assert_eq!(parse(&body), Err(Some(8)), "{name}");
         }
         assert_eq!(parse(r#"{"n":8,"op":"filename"}"#), Err(Some(8)));
+        // Der Sicherheitscheck bittet um den Abruf einer Adresse.
+        assert_eq!(parse(r#"{"n":9,"op":"scan","url":"example.com"}"#), Ok(Call { n: 9, op: Op::Scan("example.com".into()) }));
+        assert_eq!(parse(r#"{"n":9,"op":"scan","url":"  https://a.de/x  "}"#), Ok(Call { n: 9, op: Op::Scan("https://a.de/x".into()) }));
+        assert_eq!(parse(r#"{"n":9,"op":"scan","url":""}"#), Err(Some(9)));
+        assert_eq!(parse(r#"{"n":9,"op":"scan"}"#), Err(Some(9)));
+        let long = "a".repeat(2_001);
+        let body = json!({ "n": 9, "op": "scan", "url": long }).to_string();
+        assert_eq!(parse(&body), Err(Some(9)));
         // Eine volle Antwort bleibt weit unter dem, was eine Skriptzeile verträgt,
         // und eine Karte passt samt Verpackung durch den Kanal der Seiten.
         assert!(LIST_BYTES >= RECORD_MAX && LIST_BYTES <= 1_000_000);
@@ -551,6 +592,7 @@ mod tests {
         let scripts = [
             ("app-weather.js", include_str!("../ui/app-weather.js")),
             ("app-time.js", include_str!("../ui/app-time.js")),
+            ("app-security.js", include_str!("../ui/app-security.js")),
         ];
         for (name, script) in scripts {
             let keys = text_keys(script);
@@ -581,6 +623,11 @@ mod tests {
         let time = by_id("time").unwrap();
         assert!(time.connect.is_empty() && time.images.is_empty() && !time.location && time.records > 0);
         assert_eq!(by_id("weather").unwrap().records, 0);
+        // Der Sicherheitscheck darf abrufen – als einzige App; ohne Netz der Seite, ohne Standort.
+        let security = by_id("security").unwrap();
+        assert!(security.scans && security.connect.is_empty() && security.images.is_empty() && !security.location);
+        assert!(!by_id("weather").unwrap().scans && !time.scans);
+        assert_eq!(url_of("security"), "zunder://app-security/");
         // Dateien sichert nur die Zeiterfassung – als Tabelle, sonst nichts.
         assert!(may_export(time, "zeiten-2026-11.csv") && may_export(time, "ZEITEN.CSV"));
         for name in ["zeiten.html", "zeiten.csv.app", "zeiten.command", "zeiten", "csv"] {

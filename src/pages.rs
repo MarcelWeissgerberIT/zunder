@@ -863,6 +863,29 @@ impl App {
                 };
                 self.app_reply(window, tab_id, app.id, n, json!({ "state": state }));
             }
+            // Der Browser ruft eine Adresse ab und prüft sie – im Hintergrund,
+            // damit der Browser weiterläuft. Das Ergebnis kommt als `UserEvent::Scan`.
+            Op::Scan(input) => {
+                if !app.scans {
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "refused" }));
+                } else if stealth {
+                    // Ein Stealth-Fenster läuft durch den Tunnel; ein eigener
+                    // Abruf ginge daran vorbei und verriete die echte Adresse.
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "refused", "why": "stealth" }));
+                } else if !crate::security::begin() {
+                    // Es laufen schon zu viele Prüfungen – gleich noch einmal.
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "busy" }));
+                } else {
+                    let (proxy, id) = (self.proxy.clone(), app.id);
+                    std::thread::spawn(move || {
+                        let result = crate::security::scan(&input);
+                        crate::security::finish();
+                        let _ = proxy.send_event(crate::app::UserEvent::Scan { window, tab: tab_id, app: id, n, result });
+                    });
+                    // Bis das Ergebnis da ist: „läuft“ – die Seite zeigt so lange, dass geprüft wird.
+                    self.app_reply(window, tab_id, app.id, n, json!({ "state": "scanning" }));
+                }
+            }
             Op::Forget => {
                 self.store.set_setting(&crate::apps::location_key(app.id), "");
                 self.geo_waiters.retain(|(_, _, waiting, _)| *waiting != app.id);
