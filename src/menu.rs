@@ -65,6 +65,7 @@ pub fn build() -> Menu {
         &item("app_request", "m_app_request", None),
         &item("app_tasks", "m_app_tasks", key(CMD | ALT, Code::KeyK)),
         &item("app_inbox", "m_app_inbox", None),
+        &item("app_notes", "m_app_notes", None),
         &sep(),
         &item("close_tab", "m_close_tab", key(CMD, Code::KeyW)),
         &item("close_window", "m_close_window", key(CMD | SHIFT, Code::KeyW)),

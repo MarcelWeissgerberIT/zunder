@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title></title>
+<link rel="stylesheet" href="apps.css">
+<link rel="stylesheet" href="app-notes.css">
+</head>
+<body>
+<!--ICONS-->
+<header id="bar">
+  <div id="bar-left">
+    <h1 id="title"></h1>
+    <span id="count" class="count"></span>
+  </div>
+  <div id="bar-right">
+    <input id="search" type="search" autocomplete="off" spellcheck="false">
+    <select id="sort"></select>
+    <button id="export" type="button" class="ghost"></button>
+    <button id="new-btn" type="button" class="primary"></button>
+  </div>
+</header>
+
+<p id="private-note" class="banner" hidden></p>
+<p id="trouble" class="banner" hidden><span id="trouble-text"></span> <button id="trouble-retry" type="button" class="link"></button></p>
+
+<main>
+  <div id="list" class="list"></div>
+  <p id="empty" class="empty" hidden></p>
+</main>
+
+<!-- Editor -->
+<section id="editor" class="sheet" hidden>
+  <form class="sheet-box">
+    <header>
+      <button id="ed-pin" type="button" class="ghost"></button>
+      <button id="ed-close" type="button" class="round" aria-label="x"><svg><use href="#i-close"/></svg></button>
+    </header>
+    <input id="ed-title" type="text" autocomplete="off">
+    <textarea id="ed-body" rows="10" spellcheck="false"></textarea>
+    <div class="actions">
+      <button id="ed-delete" type="button" class="ghost danger"></button>
+      <span class="spacer"></span>
+      <button id="ed-cancel" type="button" class="ghost"></button>
+      <button id="ed-save" type="submit" class="primary"></button>
+    </div>
+  </form>
+</section>
+
+<div id="toast" hidden>
+  <span id="toast-text"></span>
+  <button id="toast-undo" type="button"></button>
+</div>
+
+<!--DATA-->
+<script src="apps.js"></script>
+<script src="app-notes.js"></script>
+</body>
+</html>

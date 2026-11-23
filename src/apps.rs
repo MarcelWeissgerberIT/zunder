@@ -185,6 +185,23 @@ pub const APPS: &[App] = &[
         requests: false,
         api: true,
     },
+    // Notizen: schnelle Notizen, rein lokal (Karteikarten), kein Netz.
+    App {
+        id: "notes",
+        name: "app_notes",
+        about: "app_notes_about",
+        icon: "edit",
+        page: "app-notes.html",
+        files: &["apps.css", "apps.js", "app-notes.css", "app-notes.js"],
+        connect: &[],
+        images: &[],
+        location: false,
+        records: 20_000,
+        exports: &["md"],
+        scans: false,
+        requests: false,
+        api: false,
+    },
 ];
 
 /// So groß ist der Zettel einer App höchstens (Bytes). Mehr passte auch nicht
@@ -694,6 +711,7 @@ mod tests {
             ("app-request.js", include_str!("../ui/app-request.js")),
             ("app-tasks.js", include_str!("../ui/app-tasks.js")),
             ("app-inbox.js", include_str!("../ui/app-inbox.js")),
+            ("app-notes.js", include_str!("../ui/app-notes.js")),
         ];
         for (name, script) in scripts {
             let keys = text_keys(script);
@@ -745,6 +763,10 @@ mod tests {
         assert!(!inbox.scans && !inbox.requests);
         assert!(!security.api && !inspector.api && !tasks.api && !time.api && !by_id("weather").unwrap().api);
         assert_eq!(url_of("inbox"), "zunder://app-inbox/");
+        // Notizen: lokal, Karteikarten + Markdown-Export, ohne Netz/Abruf/API.
+        let notes = by_id("notes").unwrap();
+        assert!(notes.records > 0 && notes.exports == ["md"] && notes.connect.is_empty() && !notes.api && !notes.scans && !notes.requests);
+        assert_eq!(url_of("notes"), "zunder://app-notes/");
         // Dateien sichert nur die Zeiterfassung – als Tabelle, sonst nichts.
         assert!(may_export(time, "zeiten-2026-11.csv") && may_export(time, "ZEITEN.CSV"));
         for name in ["zeiten.html", "zeiten.csv.app", "zeiten.command", "zeiten", "csv"] {
