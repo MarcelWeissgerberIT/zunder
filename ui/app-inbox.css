@@ -191,6 +191,23 @@ input {
   font: inherit;
 }
 
+#filters .toggle {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#filters .toggle.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: transparent;
+  font-weight: 600;
+}
+
 /* ---- Banner und Meldung ----------------------------------------------------- */
 
 .banner {

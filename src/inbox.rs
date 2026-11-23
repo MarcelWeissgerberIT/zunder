@@ -22,8 +22,10 @@ use serde_json::{json, Value};
 pub const BASE_KEY: &str = "app.inbox.base.atlas";
 /// Konto des Atlas-Tokens im Schlüsselbund (Dienst = der des Tresors).
 const TOKEN_ACCOUNT: &str = "inbox-token-atlas";
-/// Pfade, die abgerufen werden dürfen – nichts anderes.
-const PATHS: &[&str] = &["/api/ingest", "/api/context", "/api/record-kinds"];
+/// Pfade, die abgerufen werden dürfen – nichts anderes. `/api/query` ist die
+/// AQL-Suche (u. a. für „mir zugewiesen"); ob der Token sie darf, entscheidet
+/// der Server (sonst 401, das die App als „kein Zugriff" zeigt).
+const PATHS: &[&str] = &["/api/ingest", "/api/context", "/api/record-kinds", "/api/query"];
 /// So viel vom Antwort-Rumpf wird gezeigt.
 const BODY_MAX: u64 = 512 * 1024;
 /// So lang darf der Token höchstens sein, so lang die Abfragezeichenkette.

@@ -18,8 +18,8 @@
   let hasToken = false;
   let loading = false;
   const items = new Map(); // id (r-<ref>) → { ref, title, kind, status, project, slug, href, summary }
-  const settings = { view: 'list' }; // 'list' | 'board' (Spalten nach Status)
-  const filter = { q: '', project: '', status: '' };
+  const settings = { view: 'list', me: '' }; // view: 'list'|'board'; me: eigener Atlas-Name (für „mir zugewiesen")
+  const filter = { q: '', project: '', status: '', mine: false };
   let results = null; // null = Basis (Cache) zeigen; Array = Trefferliste (nicht gecacht)
   let filterTimer = 0;
 
@@ -74,7 +74,7 @@
   }
 
   function saveNote() {
-    Z.save({ v: 1, view: settings.view });
+    Z.save({ v: 1, view: settings.view, me: settings.me });
   }
 
   // ---- Suche und Filter ----------------------------------------------------
@@ -82,7 +82,7 @@
   // (serverseitig bestätigt). Ein aktiver Filter zeigt eine Trefferliste und
   // rührt den lokalen Cache (`items`) nicht an; „zurücksetzen" zeigt wieder die
   // gecachte Basis.
-  const activeFilter = () => !!(filter.q || filter.project || filter.status);
+  const activeFilter = () => !!(filter.q || filter.project || filter.status || filter.mine);
   const baseItems = () => [...items.values()];
   const source = () => (results !== null ? results : baseItems());
 
@@ -124,11 +124,27 @@
     }
     loading = true;
     render();
-    const parts = ['kind=feature,ticket,bug'];
-    if (filter.q) parts.push('q=' + enc(filter.q));
-    if (filter.project) parts.push('project=' + enc(filter.project));
-    if (filter.status) parts.push('status=' + enc(filter.status));
-    const answer = await Z.api({ action: 'get', path: '/api/ingest', query: parts.join('&') });
+    let path;
+    let query;
+    if (filter.mine) {
+      // „Mir zugewiesen" über die AQL-Suche. Ob der Token das darf, entscheidet
+      // der Server (sonst 401 → „kein Zugriff"). Projekt/Status werden in die
+      // AQL gehängt; die Volltextsuche gilt nur im normalen Modus.
+      const safe = (value) => String(value).replace(/"/g, '');
+      let aql = 'assignee = "' + safe(settings.me) + '"';
+      if (filter.project) aql += ' AND project = "' + safe(filter.project) + '"';
+      if (filter.status) aql += ' AND status = "' + safe(filter.status) + '"';
+      path = '/api/query';
+      query = 'aql=' + enc(aql);
+    } else {
+      path = '/api/ingest';
+      const parts = ['kind=feature,ticket,bug'];
+      if (filter.q) parts.push('q=' + enc(filter.q));
+      if (filter.project) parts.push('project=' + enc(filter.project));
+      if (filter.status) parts.push('status=' + enc(filter.status));
+      query = parts.join('&');
+    }
+    const answer = await Z.api({ action: 'get', path, query });
     loading = false;
     if (answer.state === 'ok' && answer.status >= 200 && answer.status < 300) {
       let fresh = [];
@@ -145,8 +161,10 @@
     } else if (answer.state === 'unreachable') {
       banner(S.ib_unreachable, { label: S.ib_retry, run: applyFilter });
       render();
-    } else if (answer.status === 401) {
-      banner(S.ib_unauthorized, { label: S.ib_settings, run: openSetup });
+    } else if (answer.status === 401 || answer.status === 403) {
+      // Im „mir zugewiesen"-Modus heißt 401/403: der Token darf die Suche nicht.
+      if (filter.mine) banner(S.ib_no_access);
+      else banner(answer.status === 401 ? S.ib_unauthorized : S.ib_forbidden, answer.status === 401 ? { label: S.ib_settings, run: openSetup } : null);
       render();
     } else {
       banner(S.ib_error, { label: S.ib_retry, run: applyFilter });
@@ -177,6 +195,8 @@
     $('count').textContent = all.length ? text('ib_count', { n: all.length }) : '';
     $('filters').hidden = !(base && hasToken);
     $('f-clear').hidden = !activeFilter();
+    $('f-mine').classList.toggle('on', filter.mine);
+    $('f-mine').setAttribute('aria-pressed', String(filter.mine));
     const empty = !all.length;
     $('empty').hidden = !empty;
     $('list').hidden = empty || settings.view !== 'list';
@@ -452,6 +472,7 @@
 
   function openSetup() {
     $('server').value = base;
+    $('me').value = settings.me;
     $('token').value = '';
     $('signout').hidden = !hasToken;
     $('status-line').textContent = hasToken ? S.ib_connected : S.ib_no_token;
@@ -466,6 +487,8 @@
 
   $('setup-form').addEventListener('submit', async (event) => {
     event.preventDefault();
+    settings.me = $('me').value.trim();
+    saveNote();
     const server = $('server').value.trim();
     if (!/^https?:\/\/.+/i.test(server)) {
       $('status-line').textContent = S.ib_server_missing;
@@ -523,6 +546,16 @@
     $('q').value = '';
     $('f-project').value = '';
     $('f-status').value = '';
+    filter.mine = false;
+    applyFilter();
+  });
+  $('f-mine').addEventListener('click', () => {
+    if (!filter.mine && !settings.me) {
+      toast(S.ib_need_name);
+      openSetup();
+      return;
+    }
+    filter.mine = !filter.mine;
     applyFilter();
   });
   document.addEventListener('keydown', (event) => {
@@ -543,6 +576,9 @@
   $('f-project').setAttribute('aria-label', S.ib_project);
   $('f-status').setAttribute('aria-label', S.ib_status);
   $('f-clear').textContent = S.ib_filter_clear;
+  $('f-mine').textContent = S.ib_mine;
+  $('me-label').textContent = S.ib_me_label;
+  $('me-hint').textContent = S.ib_me_hint;
   $('setup-title').textContent = S.ib_setup_title;
   $('setup-hint').textContent = S.ib_setup_hint;
   $('server-label').textContent = S.ib_server_label;
@@ -565,7 +601,10 @@
     }
     // Gemerkte Ansicht (Liste/Board) vom Zettel der App holen.
     const note = await Z.load();
-    if (note.ok && note.value && note.value.view === 'board') settings.view = 'board';
+    if (note.ok && note.value) {
+      if (note.value.view === 'board') settings.view = 'board';
+      if (typeof note.value.me === 'string') settings.me = note.value.me;
+    }
     render();
     // Dann den Stand holen (Adresse + ob ein Token hinterlegt ist) und abrufen.
     const status = await Z.api({ action: 'status' });
