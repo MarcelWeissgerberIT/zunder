@@ -60,6 +60,38 @@
   // Buchstaben-Zeichen für angeheftete Tabs ohne eigenes Seiten-Icon: der erste
   // Buchstabe des Titels, eingefärbt nach der Website – so ist jeder angeheftete
   // Tab (nur Symbol, kein Titel) auf einen Blick zu unterscheiden.
+  // Angeheftete Tabs zeigen nur das Favicon. Ist es sehr hell (ein weißes
+  // Logo), verschwände es auf dem weißen aktiven Tab – dann legen wir eine
+  // dunkle Kachel darunter. Dunkle oder bunte Favicons bleiben ohne Kachel.
+  function tintPinnedFav(box) {
+    const img = box.querySelector('img');
+    if (!img) return;
+    const check = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 16;
+        canvas.height = 16;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, 16, 16);
+        const data = ctx.getImageData(0, 0, 16, 16).data;
+        let opaque = 0;
+        let light = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] < 40) continue;
+          opaque += 1;
+          if (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] > 205) light += 1;
+        }
+        // Fast nur helle Punkte: braucht die Kachel.
+        box.classList.toggle('light-fav', opaque > 4 && light / opaque > 0.7);
+      } catch (error) {
+        /* lieber keine Kachel als ein Fehler */
+      }
+    };
+    if (img.complete && img.naturalWidth) check();
+    else img.addEventListener('load', check, { once: true });
+  }
+
   function monogram(tab) {
     const box = el('span', 'fav mono');
     let host = '';
@@ -179,7 +211,7 @@
       : state.private
         ? 'private'
         : hasFav
-          ? tab.favicon
+          ? (tab.pinned ? 'pin:' : '') + tab.favicon
           : tab.pinned
             ? 'mono:' + (tab.title || '') + '|' + tab.url
             : 'none';
@@ -191,6 +223,9 @@
         fav.appendChild(el('span', 'spinner'));
       } else if (hasFav) {
         fav = favicon(tab.favicon, 'globe');
+        // Nur angeheftete Tabs zeigen das Favicon allein – nur sie brauchen
+        // bei einem hellen Logo die Kachel.
+        if (tab.pinned) tintPinnedFav(fav);
       } else if (tab.pinned) {
         fav = monogram(tab);
       } else {

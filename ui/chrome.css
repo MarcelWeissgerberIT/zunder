@@ -5,6 +5,8 @@
   --bar: #f4f2ef;
   --tab: #ffffff;
   --tab-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.08);
+  --favtile: #5f5b55;
+  --favtile-line: rgba(255, 255, 255, 0.22);
   --field: #e9e6e2;
   --field-focus: #ffffff;
   --text: #1e1d1b;
@@ -27,6 +29,8 @@
     --bar: #262422;
     --tab: #403d3a;
     --tab-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+    --favtile: #16130f;
+    --favtile-line: rgba(255, 255, 255, 0.14);
     --field: #1a1918;
     --field-focus: #151413;
     --text: #f2efeb;
@@ -374,6 +378,21 @@ body.fullscreen #tabstrip {
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
+}
+
+/* Ein helles Favicon eines angehefteten Tabs auf einer dunklen Kachel, damit
+   es auf dem weißen aktiven Tab nicht verschwindet. */
+.tab.pinned .fav.light-fav {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--favtile);
+  box-shadow: inset 0 0 0 0.5px var(--favtile-line);
+}
+
+.tab.pinned .fav.light-fav img {
+  width: 15px;
+  height: 15px;
 }
 
 .tab .title {
