@@ -677,6 +677,7 @@
   $('translate').addEventListener('click', () => command('translate_page'));
   $('mobile').addEventListener('click', () => command('mobile_view'));
   $('shield').addEventListener('click', () => (ui.menu === 'shield' ? closeMenu() : openShield()));
+  $('timer').addEventListener('click', () => (ui.menu === 'timer' ? closeMenu() : openTimer()));
   $('ampel').addEventListener('click', () => (ui.menu === 'ampel' ? closeMenu() : openAmpel()));
   $('sec').addEventListener('click', () => (ui.menu === 'check' ? closeMenu() : openCheck()));
   $('key').addEventListener('click', () => {
@@ -795,6 +796,9 @@
       const typing = active && active.classList && active.classList.contains('cnname');
       if (!typing) fillContainers();
     }
+    ui.timer = next.timer || null;
+    renderTimer();
+    if (ui.menu === 'timer') fillTimer();
     renderSplitBar(next);
     const reader = $('reader');
     reader.hidden = !next.canRead;
@@ -1497,6 +1501,167 @@
     no.addEventListener('click', () => bar.remove());
     bar.append(yes, no);
     row.appendChild(bar);
+  }
+
+  // ------------------------------------------------------------------------
+  // Timer der Zeiterfassung – aus der Leiste steuerbar. Der Zustand kommt im
+  // Zustandstakt (`state.timer.run`), geteilt mit der Zeit-App; Stoppen rechnet
+  // den Eintrag hier aus (die Uhr-Mathe der App) und bucht ihn über den Browser.
+  // ------------------------------------------------------------------------
+
+  const TIMER_STEP_DEFAULT = 5;
+  const TIMER_MAX_BREAKS = 12;
+  let timerTick = 0;
+  const pad2 = (n) => (n < 10 ? '0' : '') + n;
+
+  function timerRun() {
+    return ui.timer && ui.timer.run && typeof ui.timer.run === 'object' ? ui.timer.run : null;
+  }
+
+  function timerElapsed(run, now) {
+    let ms = now - run.t0;
+    for (const pair of run.b || []) ms -= Math.max(0, pair[1] - pair[0]);
+    if (run.pa > 0) ms -= Math.max(0, now - run.pa);
+    return Math.max(0, ms);
+  }
+
+  function timerShort(ms) {
+    const total = Math.floor(ms / 60000);
+    return Math.floor(total / 60) + ':' + pad2(total % 60);
+  }
+
+  function timerClock(ms) {
+    const total = Math.floor(ms / 1000);
+    return Math.floor(total / 3600) + ':' + pad2(Math.floor((total % 3600) / 60)) + ':' + pad2(total % 60);
+  }
+
+  function renderTimer() {
+    const button = $('timer');
+    if (!button) return;
+    const hidden = !state || state.private || state.stealth;
+    button.hidden = !!hidden;
+    const run = timerRun();
+    button.classList.toggle('running', !!run);
+    button.classList.toggle('paused', !!(run && run.pa > 0));
+    const label = $('timer-time');
+    if (run) {
+      label.textContent = timerShort(timerElapsed(run, Date.now()));
+      button.title = (run.pa > 0 ? S.ti_paused : S.ti_running) + ' · ' + timerClock(timerElapsed(run, Date.now()));
+    } else {
+      label.textContent = '';
+      button.title = S.ti_start_tip;
+    }
+    clearInterval(timerTick);
+    if (run && !(run.pa > 0) && !hidden) {
+      timerTick = setInterval(() => {
+        const current = timerRun();
+        if (!current || current.pa > 0) {
+          clearInterval(timerTick);
+          return;
+        }
+        $('timer-time').textContent = timerShort(timerElapsed(current, Date.now()));
+        if (ui.menu === 'timer') fillTimer();
+      }, 1000);
+    }
+  }
+
+  function timerTidy(start, end, breaks) {
+    const list = breaks
+      .map(([from, to]) => [Math.max(start, from), Math.min(end, to)])
+      .filter(([from, to]) => to > from)
+      .sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const [from, to] of list) {
+      const last = merged[merged.length - 1];
+      if (last && from <= last[1]) last[1] = Math.max(last[1], to);
+      else merged.push([from, to]);
+    }
+    let s = start;
+    let e = end;
+    while (merged.length && merged[0][0] <= s) s = merged.shift()[1];
+    while (merged.length && merged[merged.length - 1][1] >= e) e = merged.pop()[0];
+    return { s, e, b: merged.slice(0, TIMER_MAX_BREAKS) };
+  }
+
+  // Aus der laufenden Uhr einen Eintrag rechnen – dieselbe Mathe wie die
+  // Zeit-App: Minute des Tages, auf den Schritt gerundet, Pausen geordnet. Über
+  // Mitternacht hinaus bucht der Schnell-Stopp vereinfacht nur den ersten Tag.
+  function timerStopEntry(run, step) {
+    const now = Date.now();
+    const endMs = run.pa > 0 ? run.pa : now;
+    const start = new Date(run.t0);
+    const keyOf = (date) => date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
+    const day = keyOf(start);
+    const minuteOf = (ms) => {
+      const date = new Date(ms);
+      if (keyOf(date) !== day) return ms > run.t0 ? 1440 : 0;
+      return date.getHours() * 60 + date.getMinutes();
+    };
+    const round = (minute) => Math.round(minute / step) * step;
+    const s = round(minuteOf(run.t0));
+    let e = round(minuteOf(endMs));
+    const breaks = (run.b || []).map((pair) => [round(minuteOf(pair[0])), round(minuteOf(pair[1]))]);
+    if (e <= s) e = Math.min(1440, s + step);
+    const shaped = timerTidy(s, e, breaks);
+    if (shaped.e <= shaped.s) return {};
+    const entry = { k: 'e', d: day, s: shaped.s, e: shaped.e, p: run.p || '', n: run.n || '' };
+    if (shaped.b.length) entry.b = shaped.b;
+    return entry;
+  }
+
+  function timerButton(cls, iconName, label, handler) {
+    const button = el('button', 'tibtn' + (cls ? ' ' + cls : ''));
+    button.type = 'button';
+    button.appendChild(icon(iconName, 'sm'));
+    button.appendChild(el('span', '', label));
+    button.addEventListener('click', handler);
+    return button;
+  }
+
+  function fillTimer() {
+    const box = $('popup');
+    box.textContent = '';
+    const run = timerRun();
+    const head = el('div', 'tih');
+    head.appendChild(icon('timer'));
+    const text = el('div', 'txt');
+    text.appendChild(el('div', 't', run ? run.n || S.ti_no_note : S.ti_idle_title));
+    const line = el('div', 'h');
+    line.textContent = run ? timerClock(timerElapsed(run, Date.now())) + (run.pa > 0 ? ' · ' + S.ti_paused : '') : S.ti_idle_hint;
+    text.appendChild(line);
+    head.appendChild(text);
+    box.appendChild(head);
+
+    const actions = el('div', 'tiactions');
+    if (!run) {
+      actions.appendChild(timerButton('primary', 'play', S.ti_start, () => post({ c: 'timerStart' })));
+    } else {
+      if (run.pa > 0) actions.appendChild(timerButton('', 'play', S.ti_resume, () => post({ c: 'timerResume' })));
+      else actions.appendChild(timerButton('', 'pause', S.ti_pause, () => post({ c: 'timerPause' })));
+      actions.appendChild(
+        timerButton('primary', 'stop', S.ti_stop, () => {
+          const step = (ui.timer && ui.timer.step) || TIMER_STEP_DEFAULT;
+          post({ c: 'timerBook', entry: timerStopEntry(run, step) });
+          closeMenu();
+        })
+      );
+    }
+    box.appendChild(actions);
+    box.appendChild(el('div', 'tin', run ? S.ti_note_running : S.ti_note_idle));
+  }
+
+  function openTimer() {
+    fillTimer();
+    const box = $('popup');
+    const place = $('timer').getBoundingClientRect();
+    box.style.top = Math.round(place.bottom + 8) + 'px';
+    box.style.left = Math.max(8, Math.min(place.left - 30, window.innerWidth - 300)) + 'px';
+    box.style.right = 'auto';
+    box.hidden = false;
+    ui.menu = 'timer';
+    closePanel();
+    closeTabSearch();
+    syncOverlay();
   }
 
   function closeMenu() {

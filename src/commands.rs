@@ -175,6 +175,10 @@ impl App {
             "containerRename" => self.container_edit(number("id").max(0) as u32, Some(&text("name")), None),
             "containerColor" => self.container_edit(number("id").max(0) as u32, None, Some(number("color").clamp(0, 7) as u8)),
             "containerDelete" => self.container_delete(number("id").max(0) as u32),
+            "timerStart" => self.timer_start(),
+            "timerPause" => self.timer_pause(),
+            "timerResume" => self.timer_resume(),
+            "timerBook" => self.timer_book(message.get("entry").cloned().unwrap_or(Value::Null)),
             "cmd" => self.command(Some(window), &text("id"), target),
             "find" => self.find(window, &text("text"), flag("back")),
             "findClose" => {

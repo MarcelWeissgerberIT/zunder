@@ -2459,6 +2459,144 @@ impl App {
         self.session_changed();
     }
 
+    // -----------------------------------------------------------------------
+    // Timer – die Uhr der Zeiterfassung, von der Symbolleiste aus steuerbar.
+    // Der Zustand lebt im `run`-Feld des Zettels der Zeit-App; die Zeit-App
+    // liest dasselbe Feld, darum bleiben beide ohne Umbau synchron.
+    // -----------------------------------------------------------------------
+
+    fn timer_now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    }
+
+    /// Der Zettel der Zeit-App als JSON-Objekt (sonst ein leeres).
+    fn time_zettel(&self) -> Value {
+        self.store
+            .setting(&crate::apps::data_key("time"))
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}))
+    }
+
+    /// Was die Symbolleiste über die laufende Uhr wissen muss.
+    fn timer_state(&self) -> Value {
+        let zettel = self.time_zettel();
+        let run = zettel.get("run").cloned().filter(Value::is_object);
+        let step = zettel.get("step").and_then(Value::as_i64).filter(|s| *s > 0).unwrap_or(5);
+        json!({ "run": run, "step": step })
+    }
+
+    /// Schreibt das `run`-Feld in den Zettel der Zeit-App (oder entfernt es) und
+    /// bringt alle Fenster auf den neuen Stand.
+    fn timer_set_run(&mut self, run: Option<Value>) {
+        let mut zettel = self.time_zettel();
+        if let Some(object) = zettel.as_object_mut() {
+            match run {
+                Some(run) => {
+                    object.insert("run".into(), run);
+                }
+                None => {
+                    object.remove("run");
+                }
+            }
+        }
+        if let Ok(text) = serde_json::to_string(&zettel) {
+            self.store.set_setting(&crate::apps::data_key("time"), &text);
+        }
+        for win in self.windows.values_mut() {
+            win.dirty = true;
+        }
+    }
+
+    /// Notiz und Projekt des zuletzt gebuchten Eintrags – für die Schnellbuchung.
+    fn timer_recent(&self) -> (String, String) {
+        let mut best: Option<(String, u64, String, String)> = None;
+        if let Some((records, _)) = self.store.app_records("time", "", 20_000, 4_000_000) {
+            for (_id, data) in records {
+                let Ok(value) = serde_json::from_str::<Value>(&data) else {
+                    continue;
+                };
+                if value.get("k").and_then(Value::as_str) != Some("e") {
+                    continue;
+                }
+                let day = value.get("d").and_then(Value::as_str).unwrap_or("").to_string();
+                let end = value.get("e").and_then(Value::as_u64).unwrap_or(0);
+                if best.as_ref().map_or(true, |(bd, be, _, _)| (day.as_str(), end) > (bd.as_str(), *be)) {
+                    let note = value.get("n").and_then(Value::as_str).unwrap_or("").to_string();
+                    let project = value.get("p").and_then(Value::as_str).unwrap_or("").to_string();
+                    best = Some((day, end, note, project));
+                }
+            }
+        }
+        best.map(|(_, _, note, project)| (note, project)).unwrap_or_default()
+    }
+
+    /// Startet die Uhr mit Notiz und Projekt des letzten Eintrags. Läuft schon
+    /// eine, bleibt sie.
+    pub fn timer_start(&mut self) {
+        if self.time_zettel().get("run").filter(|value| value.is_object()).is_some() {
+            return;
+        }
+        let (note, project) = self.timer_recent();
+        let run = json!({ "p": project, "n": note, "t0": Self::timer_now_ms(), "id": "", "si": 0, "b": [], "pa": 0 });
+        self.timer_set_run(Some(run));
+    }
+
+    pub fn timer_pause(&mut self) {
+        let mut zettel = self.time_zettel();
+        let Some(run) = zettel.get_mut("run").filter(|value| value.is_object()) else {
+            return;
+        };
+        if run.get("pa").and_then(Value::as_i64).unwrap_or(0) > 0 {
+            return;
+        }
+        if let Some(object) = run.as_object_mut() {
+            object.insert("pa".into(), json!(Self::timer_now_ms()));
+        }
+        let run = run.clone();
+        self.timer_set_run(Some(run));
+    }
+
+    pub fn timer_resume(&mut self) {
+        let mut zettel = self.time_zettel();
+        let Some(run) = zettel.get_mut("run").filter(|value| value.is_object()) else {
+            return;
+        };
+        let paused = run.get("pa").and_then(Value::as_i64).unwrap_or(0);
+        if paused <= 0 {
+            return;
+        }
+        let now = Self::timer_now_ms();
+        if let Some(breaks) = run.get_mut("b").and_then(Value::as_array_mut) {
+            if now > paused {
+                breaks.push(json!([paused, now]));
+            }
+        }
+        if let Some(object) = run.as_object_mut() {
+            object.insert("pa".into(), json!(0));
+        }
+        let run = run.clone();
+        self.timer_set_run(Some(run));
+    }
+
+    /// Bucht den in der Leiste berechneten Eintrag (Zeit-App-Mathe) und stoppt
+    /// die Uhr.
+    pub fn timer_book(&mut self, entry: Value) {
+        let day = entry.get("d").and_then(Value::as_str).unwrap_or("").to_string();
+        if !day.is_empty() {
+            static TIMER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seq = TIMER_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let id = format!("e{}t{:x}{:x}", day.replace('-', ""), Self::timer_now_ms(), seq);
+            if let Ok(text) = serde_json::to_string(&entry) {
+                let _ = self.store.put_app_record("time", &id, &text, 20_000);
+            }
+        }
+        self.timer_set_run(None);
+    }
+
     /// Sagt allen Fenstern, wie es um die Filterlisten steht (für die Einstellungen).
     pub fn send_filter_info(&mut self) {
         let info = self.blocker.info();
@@ -2872,6 +3010,7 @@ impl App {
             "canTranslate": active.translation.is_some() || crate::translate::foreign(&active.lang),
             "mobile": active.mobile,
             "ampel": self.ampel(id),
+            "timer": self.timer_state(),
             "shield": {
                 "on": self.settings.blocker || win.stealth,
                 "site": Some(&bar)
