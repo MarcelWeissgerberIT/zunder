@@ -493,6 +493,26 @@ main {
   white-space: nowrap;
 }
 
+/* Zeitstrahl eines Eintrags mit Pausen: gearbeitete Abschnitte gefüllt, die
+   Pausen dazwischen als Lücken (über die ganze Breite der Zeile). */
+.entry .track {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 5px;
+  margin-top: 4px;
+  border-radius: 3px;
+  background: var(--field);
+  overflow: hidden;
+}
+
+.entry .track .fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
 /* Kleine Marke vor der Notiz: „Pause 0:30“, „läuft weiter“. */
 .entry .mark {
   margin-right: 8px;

@@ -909,6 +909,21 @@
           choosing = '';
           renderDay();
         });
+        // Ein Zeitstrahl des Eintrags: die gearbeiteten Abschnitte gefüllt, die
+        // Pausen dazwischen als Lücken. Nur bei Einträgen mit Pausen.
+        if (entry.b && entry.b.length && entry.e > entry.s) {
+          const spanMin = entry.e - entry.s;
+          const track = node('div', 'track');
+          track.setAttribute('aria-hidden', 'true');
+          track.title = entry.b.map(([from, to]) => clock(from) + '–' + clock(to)).join(', ');
+          for (const [from, to] of segments(entry)) {
+            const fill = node('span', 'fill');
+            fill.style.left = ((from - entry.s) / spanMin) * 100 + '%';
+            fill.style.width = (Math.max(0, to - from) / spanMin) * 100 + '%';
+            track.appendChild(fill);
+          }
+          row.appendChild(track);
+        }
         box.appendChild(row);
         if (choosing === id && !live) box.appendChild(choiceFor(id, entry));
       }
@@ -941,6 +956,10 @@
 
   function editorFor(id, entry) {
     const form = node('form', 'editor');
+    // Die Prüfung der Zeitfelder macht der Code selbst: eine halb getippte
+    // Pause blockiert so nicht mit „Ungültiger Wert“, sie fällt beim Sichern
+    // einfach weg.
+    form.noValidate = true;
     const field = (type, value, label) => {
       const input = document.createElement('input');
       input.type = type;
