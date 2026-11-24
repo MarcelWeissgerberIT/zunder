@@ -1583,30 +1583,52 @@
     return { s, e, b: merged.slice(0, TIMER_MAX_BREAKS) };
   }
 
-  // Aus der laufenden Uhr einen Eintrag rechnen – dieselbe Mathe wie die
-  // Zeit-App: Minute des Tages, auf den Schritt gerundet, Pausen geordnet. Über
-  // Mitternacht hinaus bucht der Schnell-Stopp vereinfacht nur den ersten Tag.
-  function timerStopEntry(run, step) {
-    const now = Date.now();
-    const endMs = run.pa > 0 ? run.pa : now;
-    const start = new Date(run.t0);
+  // Aus der laufenden Uhr die Einträge rechnen – dieselbe Mathe wie die
+  // Zeit-App: Minute des Tages, auf den Schritt gerundet, Pausen geordnet.
+  // Läuft sie über Mitternacht, bekommt jeder Tag seinen Teil (ein Eintrag je
+  // Tag). Zurück kommt eine Liste.
+  function timerStopEntries(run, step) {
+    const until = run.pa > 0 ? run.pa : Date.now();
     const keyOf = (date) => date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
-    const day = keyOf(start);
-    const minuteOf = (ms) => {
+    const dateOf = (key) => {
+      const parts = key.split('-').map(Number);
+      return new Date(parts[0], parts[1] - 1, parts[2]);
+    };
+    const shiftDay = (key) => {
+      const date = dateOf(key);
+      date.setDate(date.getDate() + 1);
+      return keyOf(date);
+    };
+    const minuteIn = (day, ms) => {
       const date = new Date(ms);
-      if (keyOf(date) !== day) return ms > run.t0 ? 1440 : 0;
+      const key = keyOf(date);
+      if (key !== day) return key < day ? 0 : 1440;
       return date.getHours() * 60 + date.getMinutes();
     };
     const round = (minute) => Math.round(minute / step) * step;
-    const s = round(minuteOf(run.t0));
-    let e = round(minuteOf(endMs));
-    const breaks = (run.b || []).map((pair) => [round(minuteOf(pair[0])), round(minuteOf(pair[1]))]);
-    if (e <= s) e = Math.min(1440, s + step);
-    const shaped = timerTidy(s, e, breaks);
-    if (shaped.e <= shaped.s) return {};
-    const entry = { k: 'e', d: day, s: shaped.s, e: shaped.e, p: run.p || '', n: run.n || '' };
-    if (shaped.b.length) entry.b = shaped.b;
-    return entry;
+    const entries = [];
+    const lastDay = keyOf(new Date(until));
+    let day = keyOf(new Date(run.t0));
+    for (let guard = 0; guard < 8; guard++) {
+      const last = day === lastDay;
+      let begin = round(minuteIn(day, run.t0));
+      let end = Math.min(1440, round(minuteIn(day, until)));
+      const breaks = (run.b || []).map((pair) => [round(minuteIn(day, pair[0])), round(minuteIn(day, pair[1]))]);
+      // Eine eben gestartete Uhr ergibt trotzdem einen Eintrag – einen Schritt lang.
+      if (last && end <= begin && !breaks.length && !entries.length) {
+        begin = Math.floor(minuteIn(day, run.t0) / step) * step;
+        end = Math.min(1440, begin + step);
+      }
+      const shaped = timerTidy(begin, end, breaks);
+      if (shaped.e > shaped.s) {
+        const entry = { k: 'e', d: day, s: shaped.s, e: shaped.e, p: run.p || '', n: run.n || '' };
+        if (shaped.b.length) entry.b = shaped.b;
+        entries.push(entry);
+      }
+      if (last) break;
+      day = shiftDay(day);
+    }
+    return entries;
   }
 
   function timerButton(cls, iconName, label, handler) {
@@ -1641,7 +1663,7 @@
       actions.appendChild(
         timerButton('primary', 'stop', S.ti_stop, () => {
           const step = (ui.timer && ui.timer.step) || TIMER_STEP_DEFAULT;
-          post({ c: 'timerBook', entry: timerStopEntry(run, step) });
+          post({ c: 'timerBook', entry: timerStopEntries(run, step) });
           closeMenu();
         })
       );

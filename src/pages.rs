@@ -803,6 +803,13 @@ impl App {
                 } else {
                     "failed"
                 };
+                // Die Zeit-App hat ihren Zettel geändert (womöglich die laufende
+                // Uhr) – die Symbolleiste soll den Timer-Knopf sofort nachziehen.
+                if app.id == "time" && state == "ok" {
+                    for win in self.windows.values_mut() {
+                        win.dirty = true;
+                    }
+                }
                 self.app_reply(window, tab_id, app.id, n, json!({ "state": state }));
             }
             // Die Karteikarten der App – nur, wo welche für sie eingetragen

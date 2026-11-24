@@ -2585,9 +2585,19 @@ impl App {
     /// Bucht den in der Leiste berechneten Eintrag (Zeit-App-Mathe) und stoppt
     /// die Uhr.
     pub fn timer_book(&mut self, entry: Value) {
-        let day = entry.get("d").and_then(Value::as_str).unwrap_or("").to_string();
-        if !day.is_empty() {
-            static TIMER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        // Über Mitternacht kommt je Tag ein Eintrag – darum eine Liste (ein
+        // einzelner Eintrag geht als Liste mit einem Element durch).
+        let entries = match entry {
+            Value::Array(list) => list,
+            Value::Object(_) => vec![entry],
+            _ => Vec::new(),
+        };
+        static TIMER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        for entry in entries {
+            let day = entry.get("d").and_then(Value::as_str).unwrap_or("").to_string();
+            if day.is_empty() {
+                continue;
+            }
             let seq = TIMER_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let id = format!("e{}t{:x}{:x}", day.replace('-', ""), Self::timer_now_ms(), seq);
             if let Ok(text) = serde_json::to_string(&entry) {
