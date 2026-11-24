@@ -509,8 +509,15 @@ main {
   position: absolute;
   top: 0;
   bottom: 0;
-  border-radius: 3px;
   background: var(--accent);
+}
+
+/* Die Pausen deutlich grau, damit sie als Unterbrechung auffallen. */
+.entry .track .pause {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
 }
 
 /* Kleine Marke vor der Notiz: „Pause 0:30“, „läuft weiter“. */
@@ -657,7 +664,7 @@ main {
   gap: 8px;
 }
 
-.editor .brk-row input[type="time"] {
+.editor .brk-row .tf {
   width: 112px;
   flex: none;
 }

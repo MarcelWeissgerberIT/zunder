@@ -914,13 +914,21 @@
         if (entry.b && entry.b.length && entry.e > entry.s) {
           const spanMin = entry.e - entry.s;
           const track = node('div', 'track');
-          track.setAttribute('aria-hidden', 'true');
-          track.title = entry.b.map(([from, to]) => clock(from) + '–' + clock(to)).join(', ');
+          const place = (element, from, to) => {
+            element.style.left = ((from - entry.s) / spanMin) * 100 + '%';
+            element.style.width = (Math.max(0, to - from) / spanMin) * 100 + '%';
+          };
           for (const [from, to] of segments(entry)) {
             const fill = node('span', 'fill');
-            fill.style.left = ((from - entry.s) / spanMin) * 100 + '%';
-            fill.style.width = (Math.max(0, to - from) / spanMin) * 100 + '%';
+            place(fill, from, to);
             track.appendChild(fill);
+          }
+          // Die Pausen als graue Abschnitte; beim Darüberfahren die Dauer.
+          for (const [from, to] of entry.b) {
+            const pause = node('span', 'pause');
+            place(pause, from, to);
+            pause.title = clock(from) + '–' + clock(to) + ' · ' + text('tm_breaks', { time: span(to - from) });
+            track.appendChild(pause);
           }
           row.appendChild(track);
         }
@@ -968,9 +976,39 @@
       input.title = label;
       return input;
     };
+    // Zeitfeld mit Maske: Nach den zwei Stunden-Ziffern rutscht der Doppelpunkt
+    // dazwischen, „1934“ wird zu „19:34“. `minutes` darf null sein (leer).
+    const timeField = (minutes, label) => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tf';
+      input.inputMode = 'numeric';
+      input.autocomplete = 'off';
+      input.setAttribute('aria-label', label);
+      input.title = label;
+      input.placeholder = '--:--';
+      input.maxLength = 5;
+      input.value = minutes == null ? '' : clock(minutes);
+      input.addEventListener('input', () => {
+        const digits = input.value.replace(/\D/g, '').slice(0, 4);
+        input.value = digits.length > 2 ? digits.slice(0, 2) + ':' + digits.slice(2) : digits;
+      });
+      // Beim Verlassen zu vollem HH:MM auffüllen und auf 23:59 begrenzen.
+      input.addEventListener('blur', () => {
+        const digits = input.value.replace(/\D/g, '');
+        if (!digits) {
+          input.value = '';
+          return;
+        }
+        const hours = Math.min(23, parseInt(digits.slice(0, 2), 10) || 0);
+        const mins = Math.min(59, parseInt(digits.slice(2, 4) || '0', 10) || 0);
+        input.value = two(hours) + ':' + two(mins);
+      });
+      return input;
+    };
     // Ein Zeitfeld kennt kein „24:00“ – das Ende des Tages steht dort als 23:59.
-    const from = field('time', clock(entry.s), S.tm_from);
-    const until = field('time', entry.e >= DAY ? '23:59' : clock(entry.e), S.tm_until);
+    const from = timeField(entry.s, S.tm_from);
+    const until = timeField(entry.e >= DAY ? DAY - 1 : entry.e, S.tm_until);
     // Ein Projekt, das es nicht mehr gibt, steht nicht im Feld – sonst entstünde
     // beim Sichern eines mit dem Namen „Ohne Projekt“.
     const current = projects.has(entry.p) ? projects.get(entry.p).name : '';
@@ -1015,8 +1053,8 @@
     function addBreakRow(start, end) {
       if (breakRows.length >= MAX_BREAKS) return null;
       const row = node('div', 'brk-row');
-      const breakFrom = field('time', start != null ? clock(start) : '', S.tm_break_from);
-      const breakUntil = field('time', end != null ? clock(end) : '', S.tm_break_until);
+      const breakFrom = timeField(start == null ? null : start, S.tm_break_from);
+      const breakUntil = timeField(end == null ? null : end, S.tm_break_until);
       const remove = node('button', 'brk-rm');
       remove.type = 'button';
       remove.title = S.tm_remove_break;
@@ -1045,8 +1083,12 @@
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       const read = (value) => {
-        const match = /^(\d{1,2}):(\d{2})/.exec(value);
-        return match ? toMinutes(match[1], match[2]) : -1;
+        const digits = String(value).replace(/\D/g, '');
+        if (!digits) return -1;
+        const hours = parseInt(digits.slice(0, 2), 10);
+        const mins = digits.length > 2 ? parseInt(digits.slice(2, 4), 10) : 0;
+        if (hours > 23 || mins > 59) return -1;
+        return toMinutes(hours, mins);
       };
       const start = read(from.value);
       // Das Ende des Tages bleibt das Ende des Tages, solange das Feld unberührt ist.
