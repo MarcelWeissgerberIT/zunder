@@ -603,20 +603,69 @@ main {
   -webkit-user-select: text;
 }
 
-/* Die Pausen des Eintrags, über die ganze Breite. */
+/* Die Pausen des Eintrags, über die ganze Breite: je Pause eine Zeile mit
+   Von/Bis, dazu ein Knopf zum Hinzufügen. */
 .editor .pauses {
   grid-column: 1 / -1;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
+  flex-direction: column;
+  gap: 6px;
   color: var(--muted);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
-.editor .pauses .struck {
-  text-decoration: line-through;
+.editor .pauses-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.editor .pauses-title {
+  font-weight: 600;
+}
+
+.editor .brk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.editor .brk-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor .brk-row input[type="time"] {
+  width: 112px;
+  flex: none;
+}
+
+.editor .brk-sep {
+  color: var(--muted);
+}
+
+.editor .brk-rm {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.editor .brk-rm:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.editor .brk-rm svg {
+  width: 15px;
+  height: 15px;
 }
 
 .editor .actions {

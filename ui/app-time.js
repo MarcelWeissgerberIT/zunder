@@ -976,21 +976,52 @@
     save.type = 'submit';
     actions.append(cancel, save);
     form.append(from, until, project, note, names);
-    // Die Pausen des Eintrags: Sie bleiben (auf die neue Spanne gestutzt) – oder gehen.
-    let keepBreaks = true;
-    if (pauseOf(entry)) {
-      const pauses = node('div', 'pauses');
-      const label = node('span', '', text('tm_breaks', { time: span(pauseOf(entry)) }) + ': ' + entry.b.map(([start, end]) => clock(start) + '–' + clock(end)).join(', '));
-      const toggle = node('button', 'ghost', S.tm_drop_breaks);
-      toggle.type = 'button';
-      toggle.addEventListener('click', () => {
-        keepBreaks = !keepBreaks;
-        label.classList.toggle('struck', !keepBreaks);
-        toggle.textContent = keepBreaks ? S.tm_drop_breaks : S.tm_keep_breaks;
+    // Die Pausen des Eintrags: jede mit Von/Bis bearbeitbar, und eigene lassen
+    // sich einfügen. Beim Sichern bringt `tidy` sie in Ordnung (in der Spanne,
+    // der Reihe nach, verschmolzen) – leere oder unsinnige Zeilen fallen weg.
+    const pauses = node('div', 'pauses');
+    const pausesHead = node('div', 'pauses-head');
+    pausesHead.appendChild(node('span', 'pauses-title', S.tm_breaks_head));
+    const addBreak = node('button', 'ghost', S.tm_add_break);
+    addBreak.type = 'button';
+    pausesHead.appendChild(addBreak);
+    const brkList = node('div', 'brk-list');
+    pauses.append(pausesHead, brkList);
+    form.append(pauses);
+
+    const breakRows = [];
+    const syncAdd = () => {
+      addBreak.disabled = breakRows.length >= MAX_BREAKS;
+    };
+    function addBreakRow(start, end) {
+      if (breakRows.length >= MAX_BREAKS) return null;
+      const row = node('div', 'brk-row');
+      const breakFrom = field('time', start != null ? clock(start) : '', S.tm_break_from);
+      const breakUntil = field('time', end != null ? clock(end) : '', S.tm_break_until);
+      const remove = node('button', 'brk-rm');
+      remove.type = 'button';
+      remove.title = S.tm_remove_break;
+      remove.setAttribute('aria-label', S.tm_remove_break);
+      remove.appendChild(icon('close'));
+      const record = { from: breakFrom, until: breakUntil };
+      remove.addEventListener('click', () => {
+        const at = breakRows.indexOf(record);
+        if (at >= 0) breakRows.splice(at, 1);
+        row.remove();
+        syncAdd();
       });
-      pauses.append(label, toggle);
-      form.append(pauses);
+      row.append(breakFrom, node('span', 'brk-sep', '–'), breakUntil, remove);
+      brkList.appendChild(row);
+      breakRows.push(record);
+      syncAdd();
+      return breakFrom;
     }
+    for (const [start, end] of entry.b || []) addBreakRow(start, end);
+    addBreak.addEventListener('click', () => {
+      const firstField = addBreakRow();
+      if (firstField) firstField.focus();
+    });
+    syncAdd();
     form.append(actions);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -1014,7 +1045,14 @@
         if (now) {
           // Dasselbe Projekt wie vorher bleibt, wie es ist – auch ein abgelegtes.
           const chosen = !typed ? '' : typed.toLowerCase() === current.toLowerCase() ? now.p : projectFor(findProject(typed, true));
-          const shape = tidy(start, end, keepBreaks ? now.b || [] : []);
+          // Die Pausen aus den Zeilen lesen; ungültige (leer, Ende ≤ Beginn) weg.
+          const picked = [];
+          for (const record of breakRows) {
+            const breakStart = read(record.from.value);
+            const breakEnd = read(record.until.value);
+            if (breakStart >= 0 && breakEnd > breakStart) picked.push([breakStart, breakEnd]);
+          }
+          const shape = tidy(start, end, picked);
           const next = { k: 'e', d: now.d, s: shape.s, e: shape.e, p: chosen, n: noted };
           if (shape.b.length) next.b = shape.b;
           if (next.e > next.s) putEntry(id, next);
