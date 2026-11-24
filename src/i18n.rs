@@ -785,7 +785,7 @@ const STRINGS: &[(&str, &str, &str)] = &[
     ("ti_paused", "Pausiert", "Paused"),
     ("ti_start_tip", "Zeiterfassung – klicken zum Starten", "Time tracking – click to start"),
     ("ti_idle_title", "Es läuft keine Uhr", "No timer running"),
-    ("ti_idle_hint", "Starten übernimmt den letzten Eintrag.", "Start picks up your last entry."),
+    ("ti_idle_hint", "Starten übernimmt den letzten Eintrag, sonst beginnt die Uhr leer.", "Start picks up your last entry, or begins blank if there is none."),
     ("ti_no_note", "Ohne Notiz", "No note"),
     ("ti_start", "Starten", "Start"),
     ("ti_pause", "Pause", "Pause"),
