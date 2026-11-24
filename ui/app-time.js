@@ -123,6 +123,27 @@
     return list;
   }
 
+  // Die wirklich gearbeitete Zeit mehrerer Einträge: die Vereinigung ihrer
+  // Abschnitte. Überschneiden sich zwei Einträge, zählt die gemeinsame Zeit nur
+  // einmal (die Überschneidungs-Warnung an der Zeile bleibt davon unberührt).
+  function distinctWorked(list) {
+    const segs = [];
+    for (const entry of list) for (const seg of segments(entry)) if (seg[1] > seg[0]) segs.push(seg);
+    segs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let total = 0;
+    let end = -1;
+    for (const [from, to] of segs) {
+      if (from >= end) {
+        total += to - from;
+        end = to;
+      } else if (to > end) {
+        total += to - end;
+        end = to;
+      }
+    }
+    return total;
+  }
+
   // Bringt Pausen in Ordnung: in der Spanne, der Reihe nach, verschmolzen, wo sie
   // sich berühren. Eine Pause am Rand ist keine – sie verkürzt den Eintrag.
   function tidy(start, end, breaks) {
@@ -811,7 +832,7 @@
     // Ein Eintrag, der nicht mehr da ist, ist auch nicht mehr in Bearbeitung.
     if (editing && !list.some(([id]) => id === editing)) editing = '';
     if (choosing && !list.some(([id]) => id === choosing)) choosing = '';
-    const total = list.reduce((sum, [, entry]) => sum + worked(entry), 0);
+    const total = distinctWorked(list.map(([, entry]) => entry));
     const target = targetOf(shown);
     $('day-title').textContent = shown === today() ? S.tm_today : dateLabel(shown);
     const sum = $('day-sum');
@@ -1135,7 +1156,7 @@
     const first = monday(shown);
     const days = [0, 1, 2, 3, 4, 5, 6].map((offset) => shift(first, offset));
     const lists = days.map((day) => entriesOf(day));
-    const sums = lists.map((list) => list.reduce((sum, [, entry]) => sum + worked(entry), 0));
+    const sums = lists.map((list) => distinctWorked(list.map(([, entry]) => entry)));
     const targets = days.map((day) => targetOf(day));
     const total = sums.reduce((sum, value) => sum + value, 0);
     const goal = targets.reduce((sum, value) => sum + value, 0);
@@ -1188,8 +1209,14 @@
 
   function monthMinutes(day) {
     const month = day.slice(0, 7);
+    const byDay = new Map();
+    for (const entry of entries.values()) {
+      if (!entry.d.startsWith(month)) continue;
+      if (!byDay.has(entry.d)) byDay.set(entry.d, []);
+      byDay.get(entry.d).push(entry);
+    }
     let sum = 0;
-    for (const entry of entries.values()) if (entry.d.startsWith(month)) sum += worked(entry);
+    for (const list of byDay.values()) sum += distinctWorked(list);
     return sum;
   }
 
@@ -1311,9 +1338,13 @@
       grid.append(node('span', 'cal-name', new Date(2024, 0, weekday).toLocaleDateString(LANG, { weekday: 'narrow' })));
     }
     const sums = new Map();
+    const byDay = new Map();
     for (const entry of entries.values()) {
-      if (entry.d.startsWith(calendarMonth)) sums.set(entry.d, (sums.get(entry.d) || 0) + worked(entry));
+      if (!entry.d.startsWith(calendarMonth)) continue;
+      if (!byDay.has(entry.d)) byDay.set(entry.d, []);
+      byDay.get(entry.d).push(entry);
     }
+    for (const [day, list] of byDay) sums.set(day, distinctWorked(list));
     for (let blank = (first.getDay() + 6) % 7; blank > 0; blank--) grid.append(node('span', ''));
     const days = new Date(year, month, 0).getDate();
     for (let number = 1; number <= days; number++) {
