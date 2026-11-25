@@ -61,7 +61,7 @@
   // Eintrag weiter, stehen dabei seine Kennung und der Augenblick, ab dem es
   // weiterging – was davor liegt, bleibt auf die Minute, wie es gebucht war.
   let running = null; // { p, n, t0, id, since, breaks, pausedAt, cap }
-  const newRun = (project, note, t0) => ({ p: project, n: note, t0, id: '', since: 0, breaks: [], pausedAt: 0, cap: settings.cap });
+  const newRun = (project, note, t0) => ({ p: project, n: note, t0, id: '', since: 0, breaks: [], pausedAt: 0, cap: settings.cap, g: [] });
   const projects = new Map(); // Kennung → { k: 'p', name, color, gone }
   const entries = new Map(); // Kennung → { k: 'e', d, s, e, p, n, b } – b: Pausen [von, bis] in Minuten
   let editing = '';
@@ -234,7 +234,7 @@
 
   function saveNote() {
     const run = running
-      ? { p: running.p, n: running.n, t0: running.t0, id: running.id, si: running.since, b: running.breaks, pa: running.pausedAt, cap: running.cap || 0 }
+      ? { p: running.p, n: running.n, t0: running.t0, id: running.id, si: running.since, b: running.breaks, pa: running.pausedAt, cap: running.cap || 0, g: running.g || [] }
       : null;
     Z.save({ v: 1, targets: settings.targets, step: settings.step, last: settings.last, cap: settings.cap, run }).then(stored);
   }
@@ -331,6 +331,18 @@
       .filter(([from, to]) => to > from && from < e && to > s);
     const view = { k: 'e', d: day, s, e, p: running.p, n: running.n };
     if (breaks.length) view.b = breaks;
+    // Die Abschnitte der Uhr wachsen in der Vorschau mit.
+    const segs = [];
+    for (const seg of running.g || []) {
+      const from = Math.max(s, minuteIn(day, seg.s));
+      const to = Math.min(e, minuteIn(day, seg.e));
+      if (seg.n && to > from) {
+        const item = { s: from, e: to, n: seg.n };
+        if (seg.x) item.x = 1;
+        segs.push(item);
+      }
+    }
+    if (segs.length) view.g = segs;
     return view;
   }
 
@@ -699,6 +711,18 @@
         const id = was ? run.id : newId('e' + day.replace(/-/g, ''));
         const entry = { k: 'e', d: day, s: shape.s, e: shape.e, p: run.p, n: run.n };
         if (shape.b.length) entry.b = shape.b;
+        // Die Abschnitte der Uhr auf diesen Tag umrechnen (auf die Spanne geklemmt).
+        const segs = [];
+        for (const seg of run.g || []) {
+          const segStart = Math.max(shape.s, at(seg.s));
+          const segEnd = Math.min(shape.e, at(seg.e));
+          if (seg.n && segEnd > segStart) {
+            const item = { s: segStart, e: segEnd, n: seg.n };
+            if (seg.x) item.x = 1;
+            segs.push(item);
+          }
+        }
+        if (segs.length) entry.g = segs.slice(0, MAX_SEGS);
         made.push([id, was]);
         putEntry(id, entry);
       }
@@ -766,7 +790,11 @@
     if (running) {
       const until = running.pausedAt || Date.now();
       const pause = running.breaks.reduce((sum, [from, to]) => sum + (to - from), 0);
-      const seconds = Math.max(0, Math.floor((until - running.t0 - pause) / 1000));
+      // Herausgerechnete Abschnitte (z. B. Fahrzeit) zählen wie Pausen von der Uhr ab –
+      // nur der schon verstrichene Teil.
+      let subtracted = pause;
+      for (const seg of running.g || []) if (seg.x) subtracted += Math.max(0, Math.min(until, seg.e) - Math.max(running.t0, seg.s));
+      const seconds = Math.max(0, Math.floor((until - running.t0 - subtracted) / 1000));
       const stamp = Math.floor(seconds / 3600) + ':' + two(Math.floor(seconds / 60) % 60);
       const hour = (ms) => {
         const date = new Date(ms);
@@ -879,6 +907,7 @@
       p: running.p,
       n: running.n,
       b: running.breaks.map(([from, to]) => [toMin(from), toMin(to)]),
+      g: (running.g || []).map((seg) => ({ s: toMin(seg.s), e: toMin(seg.e), n: seg.n, x: seg.x })),
     };
     const box = $('running-edit-box');
     box.textContent = '';
@@ -1297,9 +1326,9 @@
     syncAdd();
 
     // Freie Abschnitte (z. B. Fahrzeit): eigene Farbe im Balken, auf Wunsch
-    // herausgerechnet wie eine Pause. Nur bei gebuchten Einträgen.
+    // herausgerechnet wie eine Pause. Auch an der laufenden Uhr.
     const segRows = [];
-    if (!live) {
+    {
       const segsBox = node('div', 'pauses segs');
       const segsHead = node('div', 'pauses-head');
       segsHead.appendChild(node('span', 'pauses-title', S.tm_seg_head));
@@ -1408,10 +1437,26 @@
           }
           picked.sort((a, b) => a[0] - b[0]);
           const chosen = !typed ? '' : typed.toLowerCase() === current.toLowerCase() ? running.p : projectFor(findProject(typed, true));
+          // Die Abschnitte als Millisekunden-Zeiten (wie die Pausen der Uhr).
+          const segsOut = [];
+          for (const record of segRows) {
+            const name = cleanSegName(record.name.value);
+            const segStart = read(record.from.value);
+            const segEnd = read(record.until.value);
+            if (!name || segStart < 0 || segEnd <= segStart) continue;
+            const f = at(segStart);
+            const t = at(segEnd);
+            if (f >= t0 && t > f && t <= now) {
+              const item = { s: f, e: t, n: name };
+              if (record.cut.classList.contains('on')) item.x = 1;
+              segsOut.push(item);
+            }
+          }
           running.p = chosen;
           running.n = noted;
           running.t0 = t0;
           running.breaks = picked;
+          running.g = segsOut.slice(0, MAX_SEGS);
           // Eine Pause vor dem neuen Beginn fällt weg; „weiter seit“ bleibt gültig.
           if (running.pausedAt && running.pausedAt < t0) running.pausedAt = 0;
           if (running.since && running.since < t0) running.since = t0;
@@ -1965,6 +2010,18 @@
         if (Number.isFinite(run.si) && run.si >= run.t0 && run.si <= now) running.since = run.si;
         // Die Nachfrage-Schwelle des Laufs (nach „Weiterlaufen“ höher als die Einstellung).
         if (Number.isFinite(run.cap) && run.cap >= 4) running.cap = Math.round(run.cap);
+        // Die Abschnitte der Uhr (Millisekunden, benannt, zwischen Beginn und jetzt).
+        for (const seg of Array.isArray(run.g) ? run.g.slice(0, MAX_SEGS) : []) {
+          if (!seg || typeof seg !== 'object') continue;
+          const segFrom = Number(seg.s);
+          const segTo = Number(seg.e);
+          const segName = cleanSegName(seg.n);
+          if (segName && Number.isFinite(segFrom) && Number.isFinite(segTo) && segFrom >= run.t0 && segTo > segFrom && segTo <= now) {
+            const item = { s: segFrom, e: segTo, n: segName };
+            if (seg.x) item.x = 1;
+            running.g.push(item);
+          }
+        }
       }
       projects.clear();
       entries.clear();

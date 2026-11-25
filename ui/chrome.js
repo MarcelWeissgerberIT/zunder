@@ -1572,9 +1572,12 @@
   }
 
   function timerElapsed(run, now) {
+    const until = run.pa > 0 ? run.pa : now;
     let ms = now - run.t0;
     for (const pair of run.b || []) ms -= Math.max(0, pair[1] - pair[0]);
     if (run.pa > 0) ms -= Math.max(0, now - run.pa);
+    // Herausgerechnete Abschnitte (z. B. Fahrzeit) zählen wie Pausen ab.
+    for (const seg of run.g || []) if (seg.x) ms -= Math.max(0, Math.min(until, seg.e) - Math.max(run.t0, seg.s));
     return Math.max(0, ms);
   }
 
@@ -1678,6 +1681,19 @@
       if (shaped.e > shaped.s) {
         const entry = { k: 'e', d: day, s: shaped.s, e: shaped.e, p: run.p || '', n: run.n || '' };
         if (shaped.b.length) entry.b = shaped.b;
+        // Die benannten Abschnitte der Uhr auf diesen Tag umrechnen.
+        const segs = [];
+        for (const seg of run.g || []) {
+          const segStart = Math.max(shaped.s, round(minuteIn(day, seg.s)));
+          const segEnd = Math.min(shaped.e, round(minuteIn(day, seg.e)));
+          const name = typeof seg.n === 'string' ? seg.n.slice(0, 24) : '';
+          if (name && segEnd > segStart) {
+            const item = { s: segStart, e: segEnd, n: name };
+            if (seg.x) item.x = 1;
+            segs.push(item);
+          }
+        }
+        if (segs.length) entry.g = segs.slice(0, 8);
         entries.push(entry);
       }
       if (last) break;
