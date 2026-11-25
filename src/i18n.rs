@@ -772,6 +772,7 @@ const STRINGS: &[(&str, &str, &str)] = &[
     ("tm_continue_now", "Er läuft ohne Pause weiter.", "It continues without a break."),
     ("tm_new_entry", "Neuen Eintrag starten", "Start a new entry"),
     ("tm_live", "läuft weiter", "continuing"),
+    ("tm_running_now", "läuft", "running"),
     ("tm_live_locked", "Dieser Eintrag läuft gerade weiter – erst stoppen.", "This entry is still running – stop it first."),
     ("tm_drop_breaks", "Pausen entfernen", "Remove breaks"),
     ("tm_keep_breaks", "Pausen behalten", "Keep breaks"),

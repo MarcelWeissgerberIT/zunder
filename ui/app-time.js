@@ -65,6 +65,10 @@
   let editing = '';
   // Der laufende Eintrag wird gerade bearbeitet (die Uhr läuft dabei weiter).
   let editRun = false;
+  // Die Live-Vorschau der laufenden Uhr (noch nicht gebucht) und der Takt, in
+  // dem sie mitwächst (Minuten, denn die Zeile zeigt Minuten).
+  const LIVE_ID = '__live__';
+  let lastLiveMinute = -1;
   // Kam die App eben über den Mini-Knopf („focus“ frisch im Zettel), öffnet sie
   // den laufenden Eintrag gleich – aber nur einmal.
   let pendingFocus = false;
@@ -260,6 +264,43 @@
     return list.sort((left, right) => left[1].s - right[1].s || left[1].e - right[1].e);
   }
 
+  // Die laufende Uhr als Vorschau-Eintrag dieses Tages – Beginn fest, Ende
+  // „jetzt", mit den bisherigen Pausen. Nur für den Starttag der Uhr (über
+  // Mitternacht zeigt die Vorschau den ersten Tag bis 24:00). Gebucht wird erst
+  // beim Stoppen; das hier wächst nur mit.
+  function liveEntryFor(day) {
+    if (!running) return null;
+    if (keyOf(new Date(running.t0)) !== day) return null;
+    const until = running.pausedAt || Date.now();
+    const s = minuteIn(day, running.t0);
+    const e = Math.min(DAY, minuteIn(day, until));
+    if (e <= s) return null;
+    const breaks = running.breaks
+      .map(([from, to]) => [minuteIn(day, from), minuteIn(day, to)])
+      .filter(([from, to]) => to > from && from < e && to > s);
+    const view = { k: 'e', d: day, s, e, p: running.p, n: running.n };
+    if (breaks.length) view.b = breaks;
+    return view;
+  }
+
+  // Die [id, Eintrag]-Liste eines Tages mit der Live-Vorschau: der
+  // weitergeführte Eintrag wird durch seinen aktuellen Stand ersetzt, eine frisch
+  // gestartete Uhr kommt als eigene Vorschau-Zeile dazu.
+  function withLive(day, list) {
+    const view = liveEntryFor(day);
+    if (!view) return list;
+    let out;
+    if (running.id && list.some(([id]) => id === running.id)) {
+      out = list.map(([id, entry]) => (id === running.id ? [id, view] : [id, entry]));
+    } else {
+      out = [...list, [LIVE_ID, view]];
+    }
+    return out.sort((left, right) => left[1].s - right[1].s || left[1].e - right[1].e);
+  }
+
+  const dayEntries = (day) => withLive(day, entriesOf(day));
+  const isLiveId = (id) => !!running && (id === LIVE_ID || running.id === id);
+
   const targetOf = (day) => Math.round((Number(settings.targets[dateOf(day).getDay()]) || 0) * 60);
 
   // ------------------------------------------------------------------------
@@ -430,7 +471,8 @@
   // lässt sich abends ein ganzer Tag nacheinander buchen). An anderen Tagen
   // schließt sie an den letzten Eintrag an; ein leerer Tag beginnt um neun.
   function placeFor(day, minutes) {
-    const list = entriesOf(day).map(([, entry]) => entry);
+    // Die laufende Uhr zählt als belegt – so wird nicht über sie hinweg gebucht.
+    const list = dayEntries(day).map(([, entry]) => entry);
     const hits = (start, end) => list.some((entry) => entry.s < end && entry.e > start);
     const now = Math.min(DAY, roundTo(nowMinutes()));
     if (day === today() && now - minutes >= 0) {
@@ -694,6 +736,19 @@
     }
     // Der Titel steht am Tab – er wechselt nur mit der Minute, nicht im Sekundentakt.
     if (document.title !== title) document.title = title;
+    // Die Live-Vorschau (Zeile, Tagessumme, Wochenbalken) wächst im Minutentakt
+    // mit – nicht beim Bearbeiten, damit kein offener Editor zerfällt.
+    if (running && !editing && !editRun) {
+      const minute = minuteIn(keyOf(new Date(running.t0)), running.pausedAt || Date.now());
+      if (minute !== lastLiveMinute) {
+        lastLiveMinute = minute;
+        renderDay();
+        renderWeek();
+        renderCalendar();
+      }
+    } else {
+      lastLiveMinute = -1;
+    }
   }
 
   // Pause: Die Uhr hält an. Weiter: Sie läuft im selben Eintrag weiter, und die
@@ -886,7 +941,7 @@
   }
 
   function renderDay() {
-    const list = entriesOf(shown);
+    const list = dayEntries(shown);
     // Ein Eintrag, der nicht mehr da ist, ist auch nicht mehr in Bearbeitung.
     if (editing && !list.some(([id]) => id === editing)) editing = '';
     if (choosing && !list.some(([id]) => id === choosing)) choosing = '';
@@ -925,12 +980,13 @@
       } else {
         const mine = segments(entry);
         const clash = mine.some(([from, to]) => busy.some(([start, end]) => from < end && to > start));
-        // Führt die Uhr diesen Eintrag gerade weiter, bleibt er, wie er ist, bis sie stoppt.
-        const live = !!running && running.id === id;
-        const row = node('div', 'entry' + (clash ? ' clash' : '') + (live ? ' live' : ''));
+        // Die laufende Uhr zeigt sich hier als Live-Vorschau (noch nicht gebucht):
+        // der weitergeführte Eintrag und die frische Uhr (LIVE_ID) wachsen mit.
+        const live = isLiveId(id);
+        const row = node('div', 'entry' + (clash ? ' clash' : '') + (live ? ' live preview' : ''));
         const pause = pauseOf(entry);
         const about = node('span', 'text');
-        if (live) about.append(node('small', 'mark', S.tm_live));
+        if (live) about.append(node('small', 'mark', id === LIVE_ID ? S.tm_running_now : S.tm_live));
         if (pause) {
           const mark = node('small', 'mark', text('tm_breaks', { time: span(pause) }));
           mark.title = entry.b.map(([from, to]) => clock(from) + '–' + clock(to)).join(', ');
@@ -1276,7 +1332,7 @@
   function renderWeek() {
     const first = monday(shown);
     const days = [0, 1, 2, 3, 4, 5, 6].map((offset) => shift(first, offset));
-    const lists = days.map((day) => entriesOf(day));
+    const lists = days.map((day) => dayEntries(day));
     const sums = lists.map((list) => distinctWorked(list.map(([, entry]) => entry)));
     const targets = days.map((day) => targetOf(day));
     const total = sums.reduce((sum, value) => sum + value, 0);
@@ -1330,14 +1386,15 @@
 
   function monthMinutes(day) {
     const month = day.slice(0, 7);
-    const byDay = new Map();
-    for (const entry of entries.values()) {
-      if (!entry.d.startsWith(month)) continue;
-      if (!byDay.has(entry.d)) byDay.set(entry.d, []);
-      byDay.get(entry.d).push(entry);
+    const dayKeys = new Set();
+    for (const entry of entries.values()) if (entry.d.startsWith(month)) dayKeys.add(entry.d);
+    // Der Tag der laufenden Uhr zählt mit – auch wenn er sonst noch leer ist.
+    if (running) {
+      const liveDay = keyOf(new Date(running.t0));
+      if (liveDay.startsWith(month)) dayKeys.add(liveDay);
     }
     let sum = 0;
-    for (const list of byDay.values()) sum += distinctWorked(list);
+    for (const key of dayKeys) sum += distinctWorked(dayEntries(key).map(([, entry]) => entry));
     return sum;
   }
 
@@ -1461,13 +1518,13 @@
       grid.append(node('span', 'cal-name', new Date(2024, 0, weekday).toLocaleDateString(LANG, { weekday: 'narrow' })));
     }
     const sums = new Map();
-    const byDay = new Map();
-    for (const entry of entries.values()) {
-      if (!entry.d.startsWith(calendarMonth)) continue;
-      if (!byDay.has(entry.d)) byDay.set(entry.d, []);
-      byDay.get(entry.d).push(entry);
+    const dayKeys = new Set();
+    for (const entry of entries.values()) if (entry.d.startsWith(calendarMonth)) dayKeys.add(entry.d);
+    if (running) {
+      const liveDay = keyOf(new Date(running.t0));
+      if (liveDay.startsWith(calendarMonth)) dayKeys.add(liveDay);
     }
-    for (const [day, list] of byDay) sums.set(day, distinctWorked(list));
+    for (const day of dayKeys) sums.set(day, distinctWorked(dayEntries(day).map(([, entry]) => entry)));
     for (let blank = (first.getDay() + 6) % 7; blank > 0; blank--) grid.append(node('span', ''));
     const days = new Date(year, month, 0).getDate();
     for (let number = 1; number <= days; number++) {

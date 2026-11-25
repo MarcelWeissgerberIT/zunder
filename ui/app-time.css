@@ -584,6 +584,16 @@ main {
   color: var(--accent);
 }
 
+/* Live-Vorschau der laufenden Uhr: leicht getönt, damit die mitwachsende,
+   noch nicht gebuchte Zeile auffällt. */
+.entry.preview {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.entry.preview:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 /* Die Frage unter einem Eintrag: weiterführen oder neu beginnen? */
 .choice {
   display: flex;
