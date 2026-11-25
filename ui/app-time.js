@@ -55,7 +55,7 @@
   let kept = false;
   let ready = false;
   let shown = today();
-  const settings = { targets: [0, 8, 8, 8, 8, 8, 0], step: 5, last: '', cap: 10 }; // Sollstunden: Sonntag … Samstag; cap: Stunden bis zur Nachfrage
+  const settings = { targets: [0, 8, 8, 8, 8, 8, 0], step: 5, last: '', cap: 10, view: 'day' }; // Sollstunden: Sonntag … Samstag; cap: Stunden bis zur Nachfrage; view: Tag/Woche/Monat
   // Die laufende Uhr: Projekt, Notiz, Beginn; dazu die Pausen bisher ([von, bis]
   // in Millisekunden) und seit wann sie gerade pausiert. Führt sie einen
   // Eintrag weiter, stehen dabei seine Kennung und der Augenblick, ab dem es
@@ -184,6 +184,58 @@
 
   const cleanSegName = (name) => Z.clip(String(name == null ? '' : name).replace(/\s+/g, ' ').trim(), 24);
 
+  // Mehrere Einträge (gleicher Tag, gleiches Projekt) zu einem zusammenfassen:
+  // Spanne vom frühesten Beginn bis zum spätesten Ende; die Lücken dazwischen und
+  // die bisherigen Pausen werden Pausen, Abschnitte und Notizen bleiben erhalten –
+  // die gearbeitete Zeit bleibt damit gleich.
+  function mergeEntries(list) {
+    const sorted = [...list].sort((left, right) => left.s - right.s);
+    const start = sorted[0].s;
+    const end = Math.max(...sorted.map((entry) => entry.e));
+    const cover = mergeIntervals(sorted.map((entry) => [entry.s, entry.e]));
+    const between = gaps(start, end, cover); // die leeren Lücken zwischen den Stücken
+    const shape = tidy(start, end, [...sorted.flatMap((entry) => entry.b || []), ...between]);
+    const merged = { k: 'e', d: sorted[0].d, s: shape.s, e: shape.e, p: sorted[0].p, n: '' };
+    merged.n = cleanNote([...new Set(sorted.map((entry) => (entry.n || '').trim()).filter(Boolean))].join('; '));
+    if (shape.b.length) merged.b = shape.b;
+    const segs = sorted.flatMap((entry) => entry.g || []);
+    if (segs.length) merged.g = segs.slice(0, MAX_SEGS);
+    return merged;
+  }
+
+  // Die zusammenführbaren Gruppen eines Tages: je Projekt, ab zwei Einträgen,
+  // ohne den gerade laufenden.
+  function mergeableGroups(day) {
+    const groups = new Map();
+    for (const [id, entry] of entriesOf(day)) {
+      if (running && running.id === id) continue;
+      if (!groups.has(entry.p)) groups.set(entry.p, []);
+      groups.get(entry.p).push([id, entry]);
+    }
+    return [...groups.values()].filter((list) => list.length >= 2);
+  }
+
+  function mergeDay(day) {
+    act(() => {
+      const groups = mergeableGroups(day);
+      if (!groups.length) return;
+      const before = [];
+      for (const list of groups) {
+        list.sort((left, right) => left[1].s - right[1].s);
+        for (const pair of list) before.push(pair);
+        const keepId = list[0][0];
+        const merged = mergeEntries(list.map(([, entry]) => entry));
+        for (let i = 1; i < list.length; i++) dropEntry(list[i][0]);
+        putEntry(keepId, merged);
+      }
+      render();
+      toast(text('tm_merged', { n: before.length }), () => {
+        for (const [id, entry] of before) putEntry(id, entry);
+        render();
+      });
+    });
+  }
+
   // Die wirklich gearbeitete Zeit mehrerer Einträge: die Vereinigung ihrer
   // Abschnitte. Überschneiden sich zwei Einträge, zählt die gemeinsame Zeit nur
   // einmal (die Überschneidungs-Warnung an der Zeile bleibt davon unberührt).
@@ -236,7 +288,7 @@
     const run = running
       ? { p: running.p, n: running.n, t0: running.t0, id: running.id, si: running.since, b: running.breaks, pa: running.pausedAt, cap: running.cap || 0, g: running.g || [] }
       : null;
-    Z.save({ v: 1, targets: settings.targets, step: settings.step, last: settings.last, cap: settings.cap, run }).then(stored);
+    Z.save({ v: 1, targets: settings.targets, step: settings.step, last: settings.last, cap: settings.cap, view: settings.view, run }).then(stored);
   }
 
   function putEntry(id, entry) {
@@ -821,7 +873,8 @@
       const minute = minuteIn(keyOf(new Date(running.t0)), running.pausedAt || Date.now());
       if (minute !== lastLiveMinute) {
         lastLiveMinute = minute;
-        renderDay();
+        if (settings.view === 'day') renderDay();
+        else renderPeriod();
         renderWeek();
         renderCalendar();
       }
@@ -958,13 +1011,65 @@
     return element;
   }
 
+  // Tag, Woche oder Monat – der Umschalter oben entscheidet, was zu sehen ist.
+  function renderViewSwitch() {
+    const box = $('view-switch');
+    box.textContent = '';
+    for (const [key, label] of [['day', S.tm_view_day], ['week', S.tm_view_week], ['month', S.tm_view_month]]) {
+      const button = node('button', settings.view === key ? 'on' : '', label);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        if (settings.view === key) return;
+        settings.view = key;
+        editing = '';
+        choosing = '';
+        saveNote();
+        render();
+      });
+      box.appendChild(button);
+    }
+  }
+
+  // Kopfzeile: Beschriftung und „heute"-Knopf je nach Ansicht.
+  function renderHead() {
+    const todayKey = today();
+    if (settings.view === 'week') {
+      const first = monday(shown);
+      const short = (day) => dateOf(day).toLocaleDateString(LANG, { day: 'numeric', month: 'short' });
+      $('date-label').textContent = text('tm_week', { from: short(first), to: short(shift(first, 6)) });
+      $('today').hidden = monday(shown) === monday(todayKey);
+      $('today').textContent = S.tm_this_week;
+    } else if (settings.view === 'month') {
+      $('date-label').textContent = dateOf(shown).toLocaleDateString(LANG, { month: 'long', year: 'numeric' });
+      $('today').hidden = shown.slice(0, 7) === todayKey.slice(0, 7);
+      $('today').textContent = S.tm_this_month;
+    } else {
+      const isToday = shown === todayKey;
+      $('date-label').textContent = isToday ? S.tm_today + ' · ' + dateLabel(shown) : dateLabel(shown);
+      $('today').hidden = isToday;
+      $('today').textContent = S.tm_today;
+    }
+  }
+
+  // Wechselt in die Tagesansicht an diesem Tag (aus Woche/Monat heraus).
+  function openDay(day) {
+    settings.view = 'day';
+    editing = '';
+    choosing = '';
+    saveNote();
+    go(day);
+  }
+
   function render() {
     if (!ready) return;
-    const isToday = shown === today();
-    $('date-label').textContent = isToday ? S.tm_today + ' · ' + dateLabel(shown) : dateLabel(shown);
-    $('today').hidden = isToday;
+    renderViewSwitch();
+    renderHead();
+    $('day').hidden = settings.view !== 'day';
+    $('period').hidden = settings.view === 'day';
+    $('week').hidden = settings.view === 'month';
     renderChips();
-    renderDay();
+    if (settings.view === 'day') renderDay();
+    else renderPeriod();
     renderWeek();
     renderCalendar();
     previewQuick();
@@ -1035,6 +1140,9 @@
     meter.hidden = !target;
     meter.classList.toggle('done', target > 0 && total >= target);
     meter.firstElementChild.style.width = target ? Math.min(100, Math.round((total / target) * 100)) + '%' : '0';
+    // Zusammenführen: nur, wenn ein Projekt an diesem Tag mehrere Einträge hat.
+    $('day-merge').textContent = S.tm_merge;
+    $('day-merge').hidden = !mergeableGroups(shown).length;
 
     const box = $('entries');
     box.textContent = '';
@@ -1520,6 +1628,70 @@
     return form;
   }
 
+  // Eine kompakte, anklickbare Zeile für die Wochen-/Monatsansicht – ein Klick
+  // führt in die Tagesansicht dieses Tages.
+  function periodRow(day, id, entry) {
+    const live = isLiveId(id);
+    const row = node('div', 'prow' + (live ? ' live' : ''));
+    const about = node('span', 'text');
+    if (live) about.append(node('small', 'mark', id === LIVE_ID ? S.tm_running_now : S.tm_live));
+    const pause = pauseOf(entry);
+    if (pause) about.append(node('small', 'mark', text('tm_breaks', { time: span(pause) })));
+    for (const seg of entry.g || []) {
+      const mark = node('small', 'mark seg', (seg.x ? '− ' : '') + seg.n + ' ' + span(seg.e - seg.s));
+      mark.style.setProperty('--seg', segColor(seg.n));
+      about.append(mark);
+    }
+    about.append(entry.n);
+    row.append(node('span', 'span', clock(entry.s) + '–' + clock(entry.e)), node('span', 'length', span(worked(entry))), tag(entry.p), about);
+    row.addEventListener('click', () => openDay(day));
+    return row;
+  }
+
+  // Woche oder Monat: die Einträge nach Tag gruppiert, je Tag Summe und (wo
+  // möglich) ein Zusammenführen-Knopf; ein Klick führt in die Tagesansicht.
+  function renderPeriod() {
+    const box = $('period');
+    box.textContent = '';
+    let days;
+    if (settings.view === 'week') {
+      const first = monday(shown);
+      days = [0, 1, 2, 3, 4, 5, 6].map((offset) => shift(first, offset));
+    } else {
+      const month = shown.slice(0, 7);
+      const keys = new Set();
+      for (const entry of entries.values()) if (entry.d.startsWith(month)) keys.add(entry.d);
+      if (running) {
+        const liveDay = keyOf(new Date(running.t0));
+        if (liveDay.startsWith(month)) keys.add(liveDay);
+      }
+      days = [...keys].sort();
+    }
+    let any = false;
+    for (const day of days) {
+      const list = dayEntries(day);
+      if (settings.view === 'month' && !list.length) continue;
+      if (list.length) any = true;
+      const group = node('div', 'pday' + (day === today() ? ' today' : ''));
+      const head = node('div', 'pday-head');
+      const open = node('button', 'pday-open');
+      open.type = 'button';
+      open.append(node('span', 'pday-date', dateLabel(day, true)), node('span', 'pday-sum', list.length ? span(distinctWorked(list.map(([, entry]) => entry))) : '–'));
+      open.addEventListener('click', () => openDay(day));
+      head.appendChild(open);
+      if (mergeableGroups(day).length) {
+        const merge = node('button', 'ghost pday-merge', S.tm_merge);
+        merge.type = 'button';
+        merge.addEventListener('click', () => mergeDay(day));
+        head.appendChild(merge);
+      }
+      group.appendChild(head);
+      for (const [id, entry] of list) group.appendChild(periodRow(day, id, entry));
+      box.appendChild(group);
+    }
+    if (!any) box.appendChild(node('p', 'period-empty', S.tm_empty));
+  }
+
   function renderWeek() {
     const first = monday(shown);
     const days = [0, 1, 2, 3, 4, 5, 6].map((offset) => shift(first, offset));
@@ -1663,9 +1835,22 @@
     render();
   }
 
-  $('prev').addEventListener('click', () => go(shift(shown, -1)));
-  $('next').addEventListener('click', () => go(shift(shown, 1)));
+  // Vor/zurück bewegt sich um die Einheit der Ansicht: Tag, Woche oder Monat.
+  function stepNav(direction) {
+    if (settings.view === 'week') {
+      go(shift(shown, direction * 7));
+    } else if (settings.view === 'month') {
+      const date = dateOf(shown);
+      date.setMonth(date.getMonth() + direction, 1);
+      go(keyOf(date));
+    } else {
+      go(shift(shown, direction));
+    }
+  }
+  $('prev').addEventListener('click', () => stepNav(-1));
+  $('next').addEventListener('click', () => stepNav(1));
   $('today').addEventListener('click', () => go(today()));
+  $('day-merge').addEventListener('click', () => mergeDay(shown));
   // ---- Kalender ---------------------------------------------------------------
   //
   // Ein Monat zum Anklicken, mit einem Punkt an den Tagen, an denen gebucht ist.
@@ -1998,6 +2183,7 @@
       if (Number.isFinite(value.cap)) settings.cap = Math.min(16, Math.max(4, Math.round(value.cap)));
       // Frischer Wink vom Mini-Knopf, gleich den laufenden Eintrag zu öffnen.
       pendingFocus = Number.isFinite(value.focus) && Date.now() - value.focus < 8000;
+      if (['day', 'week', 'month'].includes(value.view)) settings.view = value.view;
       settings.last = typeof value.last === 'string' ? value.last : '';
       running = null;
       const run = value.run;

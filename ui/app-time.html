@@ -15,6 +15,7 @@
   <button id="next" type="button" class="round"><svg><use href="#i-forward"/></svg></button>
   <button id="today" type="button" class="ghost" hidden></button>
   <div id="calendar" hidden></div>
+  <div id="view-switch" class="segmented"></div>
   <span id="week-sum"></span>
   <button id="settings-button" type="button" class="round"><svg><use href="#i-settings"/></svg></button>
 </header>
@@ -51,6 +52,7 @@
     <div id="day-head">
       <h2 id="day-title"></h2>
       <span id="day-sum"></span>
+      <button id="day-merge" type="button" class="ghost" hidden></button>
     </div>
     <div id="day-meter"><i></i></div>
     <div id="entries"></div>
@@ -65,6 +67,8 @@
     <div id="week-bars"></div>
     <div id="week-projects"></div>
   </section>
+
+  <section id="period" class="card" hidden></section>
 </main>
 
 <section id="settings" class="sheet" hidden>

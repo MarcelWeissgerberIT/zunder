@@ -475,6 +475,124 @@ main {
   color: var(--muted);
 }
 
+/* Umschalter Tag/Woche/Monat oben in der Leiste. */
+#view-switch {
+  font-size: 12.5px;
+}
+
+#view-switch button {
+  padding: 5px 11px;
+}
+
+/* „Zusammenführen" im Tageskopf rückt nach rechts. */
+#day-merge {
+  margin-left: auto;
+  align-self: center;
+  font-size: 12.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--muted);
+}
+
+#day-merge:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* Wochen-/Monatsansicht: Einträge nach Tag gruppiert. */
+#period .pday {
+  padding: 8px 0;
+}
+
+#period .pday + .pday {
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+#period .pday-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+
+#period .pday-open {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+#period .pday-open:hover {
+  background: var(--hover);
+}
+
+#period .pday.today .pday-date {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#period .pday-sum {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+#period .pday-merge {
+  flex: none;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--muted);
+}
+
+#period .pday-merge:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+#period .prow {
+  display: grid;
+  grid-template-columns: 112px 56px minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 7px 6px;
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+#period .prow:hover {
+  background: var(--hover);
+}
+
+#period .prow .span {
+  color: var(--muted);
+}
+
+#period .prow .length {
+  font-weight: 600;
+}
+
+#period .prow .text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#period .prow.live {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+#period .period-empty {
+  color: var(--muted);
+  padding: 8px 6px;
+}
+
 #day-meter {
   height: 5px;
   margin: 10px 0 6px;
@@ -575,7 +693,8 @@ main {
 }
 
 /* Kleine Marke vor der Notiz: „Pause 0:30“, „läuft weiter“. */
-.entry .mark {
+.entry .mark,
+#period .prow .mark {
   margin-right: 8px;
   padding: 2px 7px;
   border-radius: 6px;
@@ -586,7 +705,8 @@ main {
 }
 
 /* Marke eines benannten Abschnitts: in seiner Farbe umrandet. */
-.entry .mark.seg {
+.entry .mark.seg,
+#period .prow .mark.seg {
   background: none;
   box-shadow: inset 0 0 0 1px var(--seg, var(--line));
   color: var(--seg, var(--muted));
