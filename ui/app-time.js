@@ -53,16 +53,22 @@
   let kept = false;
   let ready = false;
   let shown = today();
-  const settings = { targets: [0, 8, 8, 8, 8, 8, 0], step: 5, last: '' }; // Sollstunden: Sonntag … Samstag
+  const settings = { targets: [0, 8, 8, 8, 8, 8, 0], step: 5, last: '', cap: 10 }; // Sollstunden: Sonntag … Samstag; cap: Stunden bis zur Nachfrage
   // Die laufende Uhr: Projekt, Notiz, Beginn; dazu die Pausen bisher ([von, bis]
   // in Millisekunden) und seit wann sie gerade pausiert. Führt sie einen
   // Eintrag weiter, stehen dabei seine Kennung und der Augenblick, ab dem es
   // weiterging – was davor liegt, bleibt auf die Minute, wie es gebucht war.
-  let running = null; // { p, n, t0, id, since, breaks, pausedAt }
-  const newRun = (project, note, t0) => ({ p: project, n: note, t0, id: '', since: 0, breaks: [], pausedAt: 0 });
+  let running = null; // { p, n, t0, id, since, breaks, pausedAt, cap }
+  const newRun = (project, note, t0) => ({ p: project, n: note, t0, id: '', since: 0, breaks: [], pausedAt: 0, cap: settings.cap });
   const projects = new Map(); // Kennung → { k: 'p', name, color, gone }
   const entries = new Map(); // Kennung → { k: 'e', d, s, e, p, n, b } – b: Pausen [von, bis] in Minuten
   let editing = '';
+  // Der laufende Eintrag wird gerade bearbeitet (die Uhr läuft dabei weiter).
+  let editRun = false;
+  // Kam die App eben über den Mini-Knopf („focus“ frisch im Zettel), öffnet sie
+  // den laufenden Eintrag gleich – aber nur einmal.
+  let pendingFocus = false;
+  let focusHandled = false;
   // Der Eintrag, bei dem gerade gefragt wird: weiterführen oder neu beginnen?
   let choosing = '';
   let undo = null;
@@ -173,9 +179,9 @@
 
   function saveNote() {
     const run = running
-      ? { p: running.p, n: running.n, t0: running.t0, id: running.id, si: running.since, b: running.breaks, pa: running.pausedAt }
+      ? { p: running.p, n: running.n, t0: running.t0, id: running.id, si: running.since, b: running.breaks, pa: running.pausedAt, cap: running.cap || 0 }
       : null;
-    Z.save({ v: 1, targets: settings.targets, step: settings.step, last: settings.last, run }).then(stored);
+    Z.save({ v: 1, targets: settings.targets, step: settings.step, last: settings.last, cap: settings.cap, run }).then(stored);
   }
 
   function putEntry(id, entry) {
@@ -652,6 +658,17 @@
 
   function tick() {
     $('running').hidden = !running;
+    // Lief die Uhr beim Bearbeiten aus (etwa durch den Deckel), fällt der Editor weg.
+    if (editRun && !running) {
+      editRun = false;
+      $('running-edit-box').textContent = '';
+      $('running').classList.remove('editing');
+    }
+    // Über den Mini-Knopf geöffnet (frischer „focus“): einmal gleich den Eintrag aufmachen.
+    if (!focusHandled && ready) {
+      focusHandled = true;
+      if (pendingFocus && running) showRunEditor();
+    }
     let title = S.app_time;
     if (running) {
       const until = running.pausedAt || Date.now();
@@ -737,6 +754,42 @@
     })
   );
 
+  // Den laufenden Eintrag bearbeiten – Projekt, Notiz, Pausen und (bei einer
+  // frisch gestarteten Uhr) der Beginn, während sie weiterläuft. Die Felder
+  // rechnen auf den Starttag; das Ende bleibt „jetzt“.
+  function showRunEditor() {
+    if (!running) {
+      editRun = false;
+      return;
+    }
+    editRun = true;
+    const startKey = keyOf(new Date(running.t0));
+    const toMin = (ms) => minuteIn(startKey, ms);
+    const live = {
+      k: 'e',
+      d: startKey,
+      s: toMin(running.t0),
+      e: DAY,
+      p: running.p,
+      n: running.n,
+      b: running.breaks.map(([from, to]) => [toMin(from), toMin(to)]),
+    };
+    const box = $('running-edit-box');
+    box.textContent = '';
+    box.appendChild(editorFor(running.id || 'run', live, true));
+    $('running').classList.add('editing');
+  }
+
+  $('running-edit').addEventListener('click', () => {
+    if (!ready || !running) return;
+    if (editRun) {
+      editRun = false;
+      render();
+    } else {
+      showRunEditor();
+    }
+  });
+
   // ------------------------------------------------------------------------
   // Anzeige
   // ------------------------------------------------------------------------
@@ -781,8 +834,13 @@
     renderCalendar();
     previewQuick();
     tick();
+    // Wird der laufende Eintrag nicht (mehr) bearbeitet, ist die Karte wieder normal.
+    if (!editRun) {
+      $('running-edit-box').textContent = '';
+      $('running').classList.remove('editing');
+    }
     // Stand der Abgleich mit dem Gesicherten noch aus (siehe `sync`), kommt er jetzt.
-    if (stale && !editing && !pending) sync();
+    if (stale && !editing && !editRun && !pending) sync();
   }
 
   function renderChips() {
@@ -922,8 +980,10 @@
         }
         row.addEventListener('click', () => {
           if (!ready) return;
+          // Der laufende Eintrag ist jetzt auch bearbeitbar – oben in der Karte.
           if (live) {
-            toast(S.tm_live_locked);
+            showRunEditor();
+            $('running').scrollIntoView({ block: 'nearest' });
             return;
           }
           editing = id;
@@ -983,8 +1043,12 @@
     return strip;
   }
 
-  function editorFor(id, entry) {
-    const form = node('form', 'editor');
+  function editorFor(id, entry, live) {
+    // Der laufende Eintrag: Das Ende ist „jetzt“ und steht nicht zur Wahl; der
+    // Beginn nur bei einer frisch gestarteten Uhr (ein weitergeführter Eintrag
+    // behält ihn).
+    const liveStart = !!(live && running && !running.id);
+    const form = node('form', 'editor' + (live ? ' live' : '') + (live && !liveStart ? ' nostart' : ''));
     // Die Prüfung der Zeitfelder macht der Code selbst: eine halb getippte
     // Pause blockiert so nicht mit „Ungültiger Wert“, sie fällt beim Sichern
     // einfach weg.
@@ -1029,7 +1093,8 @@
     };
     // Ein Zeitfeld kennt kein „24:00“ – das Ende des Tages steht dort als 23:59.
     const from = timeField(entry.s, S.tm_from);
-    const until = timeField(entry.e >= DAY ? DAY - 1 : entry.e, S.tm_until);
+    // Beim laufenden Eintrag gibt es kein Ende-Feld; es läuft bis jetzt.
+    const until = live ? null : timeField(entry.e >= DAY ? DAY - 1 : entry.e, S.tm_until);
     // Ein Projekt, das es nicht mehr gibt, steht nicht im Feld – sonst entstünde
     // beim Sichern eines mit dem Namen „Ohne Projekt“.
     const current = projects.has(entry.p) ? projects.get(entry.p).name : '';
@@ -1047,13 +1112,18 @@
     const cancel = node('button', 'ghost', S.tm_cancel);
     cancel.type = 'button';
     cancel.addEventListener('click', () => {
-      editing = '';
+      if (live) editRun = false;
+      else editing = '';
       render();
     });
     const save = node('button', 'primary', S.tm_save);
     save.type = 'submit';
     actions.append(cancel, save);
-    form.append(from, until, project, note, names);
+    const fields = [];
+    if (!live || liveStart) fields.push(from);
+    if (until) fields.push(until);
+    fields.push(project, note, names);
+    form.append(...fields);
     // Die Pausen des Eintrags: jede mit Von/Bis bearbeitbar, und eigene lassen
     // sich einfügen. Beim Sichern bringt `tidy` sie in Ordnung (in der Spanne,
     // der Reihe nach, verschmolzen) – leere oder unsinnige Zeilen fallen weg.
@@ -1111,6 +1181,57 @@
         if (hours > 23 || mins > 59) return -1;
         return toMinutes(hours, mins);
       };
+      // Der laufende Eintrag: zurück in die Uhr schreiben, sie läuft weiter.
+      if (live) {
+        const base = dateOf(entry.d);
+        const at = (minute) => {
+          const date = new Date(base);
+          date.setHours(Math.floor(minute / 60), minute % 60, 0, 0);
+          return date.getTime();
+        };
+        const typed = cleanName(project.value);
+        const noted = cleanNote(note.value);
+        act(() => {
+          if (!running) {
+            editRun = false;
+            render();
+            return;
+          }
+          let t0 = running.t0;
+          if (liveStart) {
+            const start = read(from.value);
+            const at0 = at(start);
+            if (start < 0 || at0 > Date.now()) {
+              from.focus();
+              return;
+            }
+            t0 = at0;
+          }
+          const now = Date.now();
+          const picked = [];
+          for (const record of breakRows) {
+            const breakStart = read(record.from.value);
+            const breakEnd = read(record.until.value);
+            if (breakStart < 0 || breakEnd <= breakStart) continue;
+            const f = at(breakStart);
+            const t = at(breakEnd);
+            if (f >= t0 && t > f && t <= now) picked.push([f, t]);
+          }
+          picked.sort((a, b) => a[0] - b[0]);
+          const chosen = !typed ? '' : typed.toLowerCase() === current.toLowerCase() ? running.p : projectFor(findProject(typed, true));
+          running.p = chosen;
+          running.n = noted;
+          running.t0 = t0;
+          running.breaks = picked;
+          // Eine Pause vor dem neuen Beginn fällt weg; „weiter seit“ bleibt gültig.
+          if (running.pausedAt && running.pausedAt < t0) running.pausedAt = 0;
+          if (running.since && running.since < t0) running.since = t0;
+          editRun = false;
+          saveNote();
+          render();
+        });
+        return;
+      }
       const start = read(from.value);
       // Das Ende des Tages bleibt das Ende des Tages, solange das Feld unberührt ist.
       const end = entry.e >= DAY && until.value === '23:59' ? DAY : read(until.value);
@@ -1148,7 +1269,7 @@
         cancel.click();
       }
     });
-    setTimeout(() => from.focus(), 0);
+    setTimeout(() => (!live || liveStart ? from : note).focus(), 0);
     return form;
   }
 
@@ -1272,6 +1393,8 @@
   $('quick-book').addEventListener('click', bookQuick);
   $('running-stop').textContent = S.tm_stop;
   $('running-drop').textContent = S.tm_drop;
+  $('running-edit').title = S.tm_edit;
+  $('running-edit').setAttribute('aria-label', S.tm_edit);
   $('today').textContent = S.tm_today;
   $('prev').title = S.tm_prev;
   $('next').title = S.tm_next;
@@ -1412,6 +1535,7 @@
     sheet.querySelector('h2').textContent = S.tm_settings;
     $('set-target-title').textContent = S.tm_set_target;
     $('set-round-title').textContent = S.tm_set_round;
+    $('set-cap-title').textContent = S.tm_set_cap;
     $('set-projects-title').textContent = S.tm_set_projects;
     $('set-export-title').textContent = S.tm_set_export;
     $('set-export-text').textContent = S.tm_set_export_text;
@@ -1457,6 +1581,26 @@
       );
       rounding.appendChild(button);
     }
+
+    const capBox = $('set-cap');
+    capBox.textContent = '';
+    const capInput = document.createElement('input');
+    capInput.type = 'number';
+    capInput.min = '4';
+    capInput.max = '16';
+    capInput.step = '1';
+    capInput.className = 'cap-input';
+    capInput.value = String(settings.cap);
+    capInput.setAttribute('aria-label', S.tm_set_cap);
+    capInput.addEventListener('change', () =>
+      act(() => {
+        const n = Math.min(16, Math.max(4, Math.round(Number(capInput.value) || 10)));
+        settings.cap = n;
+        capInput.value = String(n);
+        saveNote();
+      })
+    );
+    capBox.append(capInput, node('small', 'note', S.tm_cap_hint));
 
     const list = $('set-projects');
     list.textContent = '';
@@ -1593,6 +1737,9 @@
         settings.targets = value.targets.map((hours) => Math.min(24, Math.max(0, Number(hours) || 0)));
       }
       if ([1, 5, 15].includes(value.step)) settings.step = value.step;
+      if (Number.isFinite(value.cap)) settings.cap = Math.min(16, Math.max(4, Math.round(value.cap)));
+      // Frischer Wink vom Mini-Knopf, gleich den laufenden Eintrag zu öffnen.
+      pendingFocus = Number.isFinite(value.focus) && Date.now() - value.focus < 8000;
       settings.last = typeof value.last === 'string' ? value.last : '';
       running = null;
       const run = value.run;
@@ -1613,6 +1760,8 @@
         if (Number.isFinite(run.pa) && run.pa >= edge && run.pa <= now && run.pa > 0) running.pausedAt = run.pa;
         if (typeof run.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(run.id)) running.id = run.id;
         if (Number.isFinite(run.si) && run.si >= run.t0 && run.si <= now) running.since = run.si;
+        // Die Nachfrage-Schwelle des Laufs (nach „Weiterlaufen“ höher als die Einstellung).
+        if (Number.isFinite(run.cap) && run.cap >= 4) running.cap = Math.round(run.cap);
       }
       projects.clear();
       entries.clear();

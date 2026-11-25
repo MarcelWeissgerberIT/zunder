@@ -178,6 +178,8 @@ impl App {
             "timerStart" => self.timer_start(),
             "timerPause" => self.timer_pause(),
             "timerResume" => self.timer_resume(),
+            "timerSnooze" => self.timer_snooze(),
+            "timerOpen" => self.timer_open(window, flag("edit")),
             "timerBook" => self.timer_book(message.get("entry").cloned().unwrap_or(Value::Null)),
             "cmd" => self.command(Some(window), &text("id"), target),
             "find" => self.find(window, &text("text"), flag("back")),

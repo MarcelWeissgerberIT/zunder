@@ -677,7 +677,19 @@
   $('translate').addEventListener('click', () => command('translate_page'));
   $('mobile').addEventListener('click', () => command('mobile_view'));
   $('shield').addEventListener('click', () => (ui.menu === 'shield' ? closeMenu() : openShield()));
-  $('timer').addEventListener('click', () => (ui.menu === 'timer' ? closeMenu() : openTimer()));
+  // Klick auf den Mini-Knopf: in den laufenden Eintrag, sonst in die App. Steht
+  // gerade die Deckel-Frage, zählt der Klick als „weiterlaufen“.
+  $('timer').addEventListener('click', () => {
+    const run = timerRun();
+    if (timerAsk) {
+      const capH = (ui.timer && ui.timer.cap) || TIMER_CAP_DEFAULT;
+      if (run) run.cap = Math.floor(timerElapsed(run, Date.now()) / 3600000) + capH;
+      timerAsk = null;
+      renderTimer();
+      post({ c: 'timerSnooze' });
+    }
+    post({ c: 'timerOpen', edit: !!run });
+  });
   $('ampel').addEventListener('click', () => (ui.menu === 'ampel' ? closeMenu() : openAmpel()));
   $('sec').addEventListener('click', () => (ui.menu === 'check' ? closeMenu() : openCheck()));
   $('key').addEventListener('click', () => {
@@ -798,6 +810,7 @@
     }
     ui.timer = next.timer || null;
     renderTimer();
+    timerGuard();
     if (ui.menu === 'timer') fillTimer();
     renderSplitBar(next);
     const reader = $('reader');
@@ -1511,11 +1524,51 @@
 
   const TIMER_STEP_DEFAULT = 5;
   const TIMER_MAX_BREAKS = 12;
+  const TIMER_CAP_DEFAULT = 10; // Stunden, bis die Uhr nachfragt – überschreibbar in den Einstellungen
+  const TIMER_GRACE_MS = 5 * 60 * 1000; // so lange wartet die Nachfrage, dann stoppt und bucht sie
   let timerTick = 0;
+  // Die Uhr hat ihre Schwelle erreicht und fragt: { deadline } – reagiert niemand
+  // bis dahin, wird gestoppt und gebucht.
+  let timerAsk = null;
   const pad2 = (n) => (n < 10 ? '0' : '') + n;
 
   function timerRun() {
     return ui.timer && ui.timer.run && typeof ui.timer.run === 'object' ? ui.timer.run : null;
+  }
+
+  // Nach wie vielen Millisekunden gearbeiteter Zeit die Uhr nachfragt. Die
+  // Schwelle steht am Lauf (nach „Weiterlaufen“ höher), sonst gilt die Einstellung.
+  function timerCapMs(run) {
+    const hours = (run && run.cap > 0 ? run.cap : ui.timer && ui.timer.cap) || TIMER_CAP_DEFAULT;
+    return hours * 3600000;
+  }
+
+  // Wacht über den Deckel: Ist er erreicht, wird gefragt; bleibt das ohne Antwort,
+  // stoppt und bucht die Uhr von selbst. Läuft nichts (oder privat/getarnt),
+  // verschwindet eine offene Frage.
+  function timerGuard() {
+    const dark = !state || state.private || state.stealth;
+    const run = timerRun();
+    if (dark || !run || run.pa > 0 || timerElapsed(run, Date.now()) < timerCapMs(run)) {
+      if (timerAsk) {
+        timerAsk = null;
+        renderTimer();
+      }
+      return;
+    }
+    if (!timerAsk) {
+      timerAsk = { deadline: Date.now() + TIMER_GRACE_MS };
+      renderTimer();
+      openTimer();
+      return;
+    }
+    if (Date.now() >= timerAsk.deadline) {
+      const step = (ui.timer && ui.timer.step) || TIMER_STEP_DEFAULT;
+      const entries = timerStopEntries(run, step);
+      timerAsk = null;
+      post({ c: 'timerBook', entry: entries });
+      closeMenu();
+    }
   }
 
   function timerElapsed(run, now) {
@@ -1543,13 +1596,14 @@
     const run = timerRun();
     button.classList.toggle('running', !!run);
     button.classList.toggle('paused', !!(run && run.pa > 0));
+    button.classList.toggle('asking', !!timerAsk);
     const label = $('timer-time');
     if (run) {
       label.textContent = timerShort(timerElapsed(run, Date.now()));
-      button.title = (run.pa > 0 ? S.ti_paused : S.ti_running) + ' · ' + timerClock(timerElapsed(run, Date.now()));
+      button.title = S.ti_open_entry + ' · ' + timerClock(timerElapsed(run, Date.now()));
     } else {
       label.textContent = '';
-      button.title = S.ti_start_tip;
+      button.title = S.ti_open_idle;
     }
     clearInterval(timerTick);
     if (run && !(run.pa > 0) && !hidden) {
@@ -1561,6 +1615,7 @@
         }
         $('timer-time').textContent = timerShort(timerElapsed(current, Date.now()));
         if (ui.menu === 'timer') fillTimer();
+        timerGuard();
       }, 1000);
     }
   }
@@ -1640,36 +1695,50 @@
     return button;
   }
 
+  // Die Blase gibt es nur noch für die Deckel-Frage: Weiterlaufen oder jetzt
+  // stoppen und buchen. Steuern lässt sich die Uhr sonst in der App.
   function fillTimer() {
     const box = $('popup');
     box.textContent = '';
     const run = timerRun();
+    if (!run || !timerAsk) {
+      closeMenu();
+      return;
+    }
     const head = el('div', 'tih');
     head.appendChild(icon('timer'));
     const text = el('div', 'txt');
-    text.appendChild(el('div', 't', run ? run.n || S.ti_no_note : S.ti_idle_title));
+    text.appendChild(el('div', 't', S.ti_cap_title));
     const line = el('div', 'h');
-    line.textContent = run ? timerClock(timerElapsed(run, Date.now())) + (run.pa > 0 ? ' · ' + S.ti_paused : '') : S.ti_idle_hint;
+    const left = Math.max(0, timerAsk.deadline - Date.now());
+    line.textContent =
+      timerClock(timerElapsed(run, Date.now())) + ' · ' + S.ti_cap_in + ' ' + Math.floor(left / 60000) + ':' + pad2(Math.floor((left % 60000) / 1000));
     text.appendChild(line);
     head.appendChild(text);
     box.appendChild(head);
 
     const actions = el('div', 'tiactions');
-    if (!run) {
-      actions.appendChild(timerButton('primary', 'play', S.ti_start, () => post({ c: 'timerStart' })));
-    } else {
-      if (run.pa > 0) actions.appendChild(timerButton('', 'play', S.ti_resume, () => post({ c: 'timerResume' })));
-      else actions.appendChild(timerButton('', 'pause', S.ti_pause, () => post({ c: 'timerPause' })));
-      actions.appendChild(
-        timerButton('primary', 'stop', S.ti_stop, () => {
-          const step = (ui.timer && ui.timer.step) || TIMER_STEP_DEFAULT;
-          post({ c: 'timerBook', entry: timerStopEntries(run, step) });
-          closeMenu();
-        })
-      );
-    }
+    actions.appendChild(
+      timerButton('primary', 'play', S.ti_cap_keep, () => {
+        const capH = (ui.timer && ui.timer.cap) || TIMER_CAP_DEFAULT;
+        run.cap = Math.floor(timerElapsed(run, Date.now()) / 3600000) + capH;
+        timerAsk = null;
+        post({ c: 'timerSnooze' });
+        renderTimer();
+        closeMenu();
+      })
+    );
+    actions.appendChild(
+      timerButton('', 'stop', S.ti_stop, () => {
+        const step = (ui.timer && ui.timer.step) || TIMER_STEP_DEFAULT;
+        const entries = timerStopEntries(run, step);
+        timerAsk = null;
+        post({ c: 'timerBook', entry: entries });
+        closeMenu();
+      })
+    );
     box.appendChild(actions);
-    box.appendChild(el('div', 'tin', run ? S.ti_note_running : S.ti_note_idle));
+    box.appendChild(el('div', 'tin', S.ti_cap_note));
   }
 
   function openTimer() {

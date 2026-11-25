@@ -780,6 +780,9 @@ const STRINGS: &[(&str, &str, &str)] = &[
     ("tm_remove_break", "Pause entfernen", "Remove break"),
     ("tm_break_from", "Pause von", "Break from"),
     ("tm_break_until", "Pause bis", "Break until"),
+    ("tm_set_cap", "Uhr stoppt nach (Stunden)", "Timer stops after (hours)"),
+    ("tm_cap_hint", "Zwischen 4 und 16 Stunden – dann fragt die Uhr kurz nach.", "Between 4 and 16 hours – then the timer asks briefly."),
+    ("tm_edit", "Eintrag bearbeiten", "Edit entry"),
     // Timer-Knopf in der Symbolleiste
     ("ti_running", "Läuft", "Running"),
     ("ti_paused", "Pausiert", "Paused"),
@@ -793,6 +796,13 @@ const STRINGS: &[(&str, &str, &str)] = &[
     ("ti_stop", "Stoppen & buchen", "Stop & book"),
     ("ti_note_idle", "Nimmt Notiz und Projekt des letzten Eintrags.", "Uses the note and project of your last entry."),
     ("ti_note_running", "Stoppen bucht den Eintrag in die Zeiterfassung.", "Stopping books the entry into the time tracker."),
+    ("ti_open_idle", "Zeiterfassung öffnen", "Open time tracking"),
+    ("ti_open_entry", "Zum laufenden Eintrag", "Go to the running entry"),
+    // Nachfrage, wenn die Uhr den eingestellten Deckel erreicht
+    ("ti_cap_title", "Läuft die Uhr noch?", "Is the timer still running?"),
+    ("ti_cap_in", "Stoppt von selbst in", "Stops on its own in"),
+    ("ti_cap_keep", "Weiterlaufen lassen", "Keep it running"),
+    ("ti_cap_note", "Reagierst du nicht, wird gestoppt und gebucht. Den neuen Tag startest du selbst.", "If you do not respond, it stops and books. You start the new day yourself."),
     ("tm_col_break", "Pause (Minuten)", "Break (minutes)"),
     ("tm_chip_tip", "Für die nächste Buchung vormerken", "Use for the next booking"),
     ("tm_of", "von {time}", "of {time}"),

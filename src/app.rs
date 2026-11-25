@@ -2486,7 +2486,9 @@ impl App {
         let zettel = self.time_zettel();
         let run = zettel.get("run").cloned().filter(Value::is_object);
         let step = zettel.get("step").and_then(Value::as_i64).filter(|s| *s > 0).unwrap_or(5);
-        json!({ "run": run, "step": step })
+        // Nach wie vielen Stunden die Uhr nachfragt (4…16, Standard 10).
+        let cap = zettel.get("cap").and_then(Value::as_i64).unwrap_or(10).clamp(4, 16);
+        json!({ "run": run, "step": step, "cap": cap })
     }
 
     /// Schreibt das `run`-Feld in den Zettel der Zeit-App (oder entfernt es) und
@@ -2537,11 +2539,13 @@ impl App {
     /// Startet die Uhr mit Notiz und Projekt des letzten Eintrags. Läuft schon
     /// eine, bleibt sie.
     pub fn timer_start(&mut self) {
-        if self.time_zettel().get("run").filter(|value| value.is_object()).is_some() {
+        let zettel = self.time_zettel();
+        if zettel.get("run").filter(|value| value.is_object()).is_some() {
             return;
         }
+        let cap = zettel.get("cap").and_then(Value::as_i64).unwrap_or(10).clamp(4, 16);
         let (note, project) = self.timer_recent();
-        let run = json!({ "p": project, "n": note, "t0": Self::timer_now_ms(), "id": "", "si": 0, "b": [], "pa": 0 });
+        let run = json!({ "p": project, "n": note, "t0": Self::timer_now_ms(), "id": "", "si": 0, "b": [], "pa": 0, "cap": cap });
         self.timer_set_run(Some(run));
     }
 
@@ -2582,9 +2586,66 @@ impl App {
         self.timer_set_run(Some(run));
     }
 
+    /// „Weiterlaufen lassen“: Die Nachfrage-Schwelle wandert um das eingestellte
+    /// Maß nach oben, sodass erst nach einem weiteren Zeitraum wieder gefragt
+    /// wird. Die gearbeitete Zeit ist reine Millisekunden-Rechnung (ohne Zeitzone).
+    pub fn timer_snooze(&mut self) {
+        let cap = self.time_zettel().get("cap").and_then(Value::as_i64).unwrap_or(10).clamp(4, 16);
+        let mut zettel = self.time_zettel();
+        let Some(run) = zettel.get_mut("run").filter(|value| value.is_object()) else {
+            return;
+        };
+        let now = Self::timer_now_ms();
+        let t0 = run.get("t0").and_then(Value::as_i64).unwrap_or(now);
+        let mut worked = now - t0;
+        if let Some(breaks) = run.get("b").and_then(Value::as_array) {
+            for pair in breaks {
+                if let Some(list) = pair.as_array() {
+                    let from = list.first().and_then(Value::as_i64).unwrap_or(0);
+                    let to = list.get(1).and_then(Value::as_i64).unwrap_or(0);
+                    worked -= (to - from).max(0);
+                }
+            }
+        }
+        let paused = run.get("pa").and_then(Value::as_i64).unwrap_or(0);
+        if paused > 0 {
+            worked -= (now - paused).max(0);
+        }
+        let hours = worked.max(0) / 3_600_000;
+        if let Some(object) = run.as_object_mut() {
+            object.insert("cap".into(), json!(hours + cap));
+        }
+        let run = run.clone();
+        self.timer_set_run(Some(run));
+    }
+
+    /// Öffnet die Zeit-App. Läuft eine Uhr und `edit`, bekommt die App über ein
+    /// kurzlebiges Zettel-Feld (`focus`) den Wink, gleich den laufenden Eintrag
+    /// aufzumachen – die Adresse bleibt die blanke App-Adresse (keine Anhängsel).
+    pub fn timer_open(&mut self, window: WindowId, edit: bool) {
+        if edit {
+            let mut zettel = self.time_zettel();
+            let has_run = zettel.get("run").filter(|value| value.is_object()).is_some();
+            if has_run {
+                if let Some(object) = zettel.as_object_mut() {
+                    object.insert("focus".into(), json!(Self::timer_now_ms()));
+                }
+                if let Ok(text) = serde_json::to_string(&zettel) {
+                    self.store.set_setting(&crate::apps::data_key("time"), &text);
+                }
+            }
+        }
+        self.new_tab(window, Some(crate::apps::url_of("time")), true, None);
+    }
+
     /// Bucht den in der Leiste berechneten Eintrag (Zeit-App-Mathe) und stoppt
     /// die Uhr.
     pub fn timer_book(&mut self, entry: Value) {
+        // Läuft keine Uhr mehr (etwa weil ein anderes Fenster eben gebucht hat),
+        // entsteht hier kein zweiter Eintrag.
+        if self.time_zettel().get("run").filter(|value| value.is_object()).is_none() {
+            return;
+        }
         // Über Mitternacht kommt je Tag ein Eintrag – darum eine Liste (ein
         // einzelner Eintrag geht als Liste mit einem Element durch).
         let entries = match entry {

@@ -411,6 +411,48 @@ main {
   font-size: 12.5px;
 }
 
+/* Stift oben rechts: den laufenden Eintrag bearbeiten. */
+#running-edit {
+  order: 9;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+#running-edit:hover {
+  background: var(--hover);
+  color: inherit;
+}
+
+#running-edit svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Beim Bearbeiten weicht die Karte dem Editor – alles andere tritt zurück. */
+#running-edit-box {
+  display: none;
+  flex-basis: 100%;
+}
+
+#running.editing > :not(#running-edit-box) {
+  display: none;
+}
+
+#running.editing #running-edit-box {
+  display: block;
+}
+
+#running.editing .editor {
+  box-shadow: none;
+  padding: 2px 0 0;
+}
+
 /* ---- Der Tag ---------------------------------------------------------------- */
 
 #day-head,
@@ -611,6 +653,15 @@ main {
   gap: 8px;
   padding: 10px 6px 12px;
   box-shadow: inset 0 1px 0 var(--line);
+}
+
+/* Der laufende Eintrag kennt kein Ende-Feld – und ein weitergeführter auch keinen Beginn. */
+.editor.live {
+  grid-template-columns: 96px minmax(0, 150px) minmax(0, 1fr);
+}
+
+.editor.live.nostart {
+  grid-template-columns: minmax(0, 150px) minmax(0, 1fr);
 }
 
 .editor input,
@@ -854,6 +905,24 @@ main {
   width: 100%;
   padding: 0 4px;
   text-align: center;
+}
+
+/* Deckel der Uhr: eine Zahl (4–16) mit kurzem Hinweis daneben. */
+#set-cap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cap-input {
+  width: 72px;
+  text-align: center;
+}
+
+#set-cap .note {
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 .segmented {

@@ -2170,6 +2170,18 @@ body.sheet #scrim {
   color: var(--muted);
 }
 
+/* Die Uhr hat ihre Schwelle erreicht und wartet auf Antwort. */
+#timer.asking {
+  color: var(--accent);
+  animation: timer-asking 1.1s ease-in-out infinite;
+}
+
+@keyframes timer-asking {
+  50% {
+    opacity: 0.4;
+  }
+}
+
 /* Timer-Popup. */
 .tih {
   display: flex;
