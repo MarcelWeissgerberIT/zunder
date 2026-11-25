@@ -16,6 +16,8 @@
 
   // So viele Pausen kennt ein Eintrag höchstens.
   const MAX_BREAKS = 12;
+  // So viele freie Abschnitte (z. B. Fahrzeit) kennt ein Eintrag höchstens.
+  const MAX_SEGS = 8;
   const COLORS = ['#e8590c', '#1c7ed6', '#2f9e44', '#ae3ec9', '#f08c00', '#0c8599', '#e03131', '#5f3dc4', '#74b816', '#d6336c'];
   const DAY = 24 * 60;
 
@@ -114,24 +116,73 @@
       }
     }
     if (breaks.length) entry.b = breaks;
+    // Freie Abschnitte (z. B. Fahrzeit): Name, in der Spanne; mit Haken (x) werden
+    // sie herausgerechnet, sonst zählen sie mit. Jeder bekommt im Balken eine Farbe.
+    const segs = [];
+    for (const seg of Array.isArray(value.g) ? value.g.slice(0, MAX_SEGS) : []) {
+      if (!seg || typeof seg !== 'object') continue;
+      const from = Number(seg.s);
+      const to = Number(seg.e);
+      const name = cleanSegName(seg.n);
+      if (!name || !Number.isInteger(from) || !Number.isInteger(to) || from < start || to > end || to <= from) continue;
+      const item = { s: from, e: to, n: name };
+      if (seg.x) item.x = 1;
+      segs.push(item);
+    }
+    if (segs.length) entry.g = segs;
     return entry;
   }
 
-  // Gearbeitete Minuten eines Eintrags: seine Spanne ohne die Pausen darin.
+  // Die Summe der Pausen (für die Marke „Pause 0:30" an der Zeile).
   const pauseOf = (entry) => (entry.b || []).reduce((sum, [from, to]) => sum + (to - from), 0);
-  const worked = (entry) => entry.e - entry.s - pauseOf(entry);
 
-  // Die gearbeiteten Abschnitte eines Eintrags – zwischen ihnen liegen die Pausen.
-  function segments(entry) {
-    const list = [];
-    let from = entry.s;
-    for (const [start, end] of entry.b || []) {
-      list.push([from, start]);
-      from = end;
+  // Intervalle verschmelzen: geordnet, überlappende zusammengelegt.
+  function mergeIntervals(list) {
+    const sorted = list.filter(([from, to]) => to > from).sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+    const out = [];
+    for (const [from, to] of sorted) {
+      const last = out[out.length - 1];
+      if (last && from <= last[1]) last[1] = Math.max(last[1], to);
+      else out.push([from, to]);
     }
-    list.push([from, entry.e]);
+    return out;
+  }
+
+  // Was von [s, e] übrig bleibt, wenn die (verschmolzenen) Intervalle herausfallen.
+  function gaps(s, e, merged) {
+    const list = [];
+    let from = s;
+    for (const [a, b] of merged) {
+      if (a > from) list.push([from, a]);
+      from = Math.max(from, b);
+    }
+    if (e > from) list.push([from, e]);
     return list;
   }
+
+  // Herausgerechnet (zählt nicht als Arbeit): die Pausen und die Abschnitte mit Haken.
+  const cutIntervals = (entry) =>
+    mergeIntervals([...(entry.b || []), ...(entry.g || []).filter((seg) => seg.x).map((seg) => [seg.s, seg.e])]);
+
+  // Alles, was im Balken keine blanke Arbeit ist: Pausen und alle Abschnitte.
+  const coveredIntervals = (entry) => mergeIntervals([...(entry.b || []), ...(entry.g || []).map((seg) => [seg.s, seg.e])]);
+
+  // Die gearbeiteten Abschnitte: Spanne ohne Pausen und herausgerechnete Abschnitte.
+  function segments(entry) {
+    return gaps(entry.s, entry.e, cutIntervals(entry));
+  }
+
+  // Gearbeitete Minuten eines Eintrags.
+  const worked = (entry) => segments(entry).reduce((sum, [from, to]) => sum + (to - from), 0);
+
+  // Eine stabile Farbe je Abschnitt-Name – gleicher Name, gleiche Farbe.
+  function segColor(name) {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+    return 'hsl(' + (hash % 360) + ' 60% 50%)';
+  }
+
+  const cleanSegName = (name) => Z.clip(String(name == null ? '' : name).replace(/\s+/g, ' ').trim(), 24);
 
   // Die wirklich gearbeitete Zeit mehrerer Einträge: die Vereinigung ihrer
   // Abschnitte. Überschneiden sich zwei Einträge, zählt die gemeinsame Zeit nur
@@ -992,6 +1043,13 @@
           mark.title = entry.b.map(([from, to]) => clock(from) + '–' + clock(to)).join(', ');
           about.append(mark);
         }
+        // Benannte Abschnitte als farbige Marken; herausgerechnete mit „−".
+        for (const seg of entry.g || []) {
+          const mark = node('small', 'mark seg', (seg.x ? '− ' : '') + seg.n + ' ' + span(seg.e - seg.s));
+          mark.style.setProperty('--seg', segColor(seg.n));
+          mark.title = clock(seg.s) + '–' + clock(seg.e) + ' · ' + (seg.x ? S.tm_seg_cut : S.tm_seg_counts);
+          about.append(mark);
+        }
         about.append(entry.n);
         row.append(node('span', 'span', clock(entry.s) + '–' + clock(entry.e)), node('span', 'length', span(worked(entry))), tag(entry.p), about);
         if (clash) row.title = S.tm_clash;
@@ -1046,26 +1104,37 @@
           choosing = '';
           renderDay();
         });
-        // Ein Zeitstrahl des Eintrags: die gearbeiteten Abschnitte gefüllt, die
-        // Pausen dazwischen als Lücken. Nur bei Einträgen mit Pausen.
-        if (entry.b && entry.b.length && entry.e > entry.s) {
+        // Ein Zeitstrahl des Eintrags: blanke Arbeit (Akzent), Pausen grau als
+        // Lücke, benannte Abschnitte in ihrer eigenen Farbe. Nur, wenn es etwas
+        // davon gibt.
+        const hasBands = (entry.b && entry.b.length) || (entry.g && entry.g.length);
+        if (hasBands && entry.e > entry.s) {
           const spanMin = entry.e - entry.s;
           const track = node('div', 'track');
           const place = (element, from, to) => {
             element.style.left = ((from - entry.s) / spanMin) * 100 + '%';
             element.style.width = (Math.max(0, to - from) / spanMin) * 100 + '%';
           };
-          for (const [from, to] of segments(entry)) {
+          // Blanke Arbeit überall, wo weder Pause noch Abschnitt liegt.
+          for (const [from, to] of gaps(entry.s, entry.e, coveredIntervals(entry))) {
             const fill = node('span', 'fill');
             place(fill, from, to);
             track.appendChild(fill);
           }
-          // Die Pausen als graue Abschnitte; beim Darüberfahren die Dauer.
-          for (const [from, to] of entry.b) {
-            const pause = node('span', 'pause');
-            place(pause, from, to);
-            pause.title = clock(from) + '–' + clock(to) + ' · ' + text('tm_breaks', { time: span(to - from) });
-            track.appendChild(pause);
+          // Die Pausen als graue Lücken; beim Darüberfahren die Dauer.
+          for (const [from, to] of entry.b || []) {
+            const band = node('span', 'pause');
+            place(band, from, to);
+            band.title = clock(from) + '–' + clock(to) + ' · ' + text('tm_breaks', { time: span(to - from) });
+            track.appendChild(band);
+          }
+          // Benannte Abschnitte in eigener Farbe; herausgerechnete etwas blasser.
+          for (const seg of entry.g || []) {
+            const band = node('span', 'seg' + (seg.x ? ' cut' : ''));
+            place(band, seg.s, seg.e);
+            band.style.setProperty('--seg', segColor(seg.n));
+            band.title = seg.n + ' · ' + clock(seg.s) + '–' + clock(seg.e) + ' · ' + span(seg.e - seg.s) + ' · ' + (seg.x ? S.tm_seg_cut : S.tm_seg_counts);
+            track.appendChild(band);
           }
           row.appendChild(track);
         }
@@ -1226,6 +1295,70 @@
       if (firstField) firstField.focus();
     });
     syncAdd();
+
+    // Freie Abschnitte (z. B. Fahrzeit): eigene Farbe im Balken, auf Wunsch
+    // herausgerechnet wie eine Pause. Nur bei gebuchten Einträgen.
+    const segRows = [];
+    if (!live) {
+      const segsBox = node('div', 'pauses segs');
+      const segsHead = node('div', 'pauses-head');
+      segsHead.appendChild(node('span', 'pauses-title', S.tm_seg_head));
+      const addSeg = node('button', 'ghost', S.tm_add_seg);
+      addSeg.type = 'button';
+      segsHead.appendChild(addSeg);
+      const segList = node('div', 'brk-list');
+      segsBox.append(segsHead, segList);
+      form.append(segsBox);
+      const syncSeg = () => {
+        addSeg.disabled = segRows.length >= MAX_SEGS;
+      };
+      const addSegRow = (seg) => {
+        if (segRows.length >= MAX_SEGS) return null;
+        const row = node('div', 'seg-row');
+        const dot = node('span', 'seg-dot');
+        const name = document.createElement('input');
+        name.type = 'text';
+        name.className = 'seg-name';
+        name.placeholder = S.tm_seg_name;
+        name.maxLength = 24;
+        name.value = seg ? seg.n : '';
+        const paint = () => dot.style.setProperty('--seg', segColor(cleanSegName(name.value) || ' '));
+        name.addEventListener('input', paint);
+        paint();
+        const segFrom = timeField(seg ? seg.s : null, S.tm_from);
+        const segUntil = timeField(seg ? seg.e : null, S.tm_until);
+        const cut = node('button', 'seg-cut' + (!seg || seg.x ? ' on' : ''), S.tm_seg_cut);
+        cut.type = 'button';
+        cut.setAttribute('aria-pressed', !seg || seg.x ? 'true' : 'false');
+        cut.addEventListener('click', () => {
+          const on = cut.classList.toggle('on');
+          cut.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        const remove = node('button', 'brk-rm');
+        remove.type = 'button';
+        remove.title = S.tm_remove_seg;
+        remove.setAttribute('aria-label', S.tm_remove_seg);
+        remove.appendChild(icon('close'));
+        const record = { name, from: segFrom, until: segUntil, cut };
+        remove.addEventListener('click', () => {
+          const at = segRows.indexOf(record);
+          if (at >= 0) segRows.splice(at, 1);
+          row.remove();
+          syncSeg();
+        });
+        row.append(dot, name, segFrom, node('span', 'brk-sep', '–'), segUntil, cut, remove);
+        segList.appendChild(row);
+        segRows.push(record);
+        syncSeg();
+        return name;
+      };
+      for (const seg of entry.g || []) addSegRow(seg);
+      addSeg.addEventListener('click', () => {
+        const field = addSegRow();
+        if (field) field.focus();
+      });
+      syncSeg();
+    }
     form.append(actions);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -1314,6 +1447,19 @@
           const shape = tidy(start, end, picked);
           const next = { k: 'e', d: now.d, s: shape.s, e: shape.e, p: chosen, n: noted };
           if (shape.b.length) next.b = shape.b;
+          // Die Abschnitte aus den Zeilen lesen; nur benannte, in der Spanne.
+          const segsOut = [];
+          for (const record of segRows) {
+            const name = cleanSegName(record.name.value);
+            const from = read(record.from.value);
+            const to = read(record.until.value);
+            if (name && from >= shape.s && to > from && to <= shape.e) {
+              const item = { s: from, e: to, n: name };
+              if (record.cut.classList.contains('on')) item.x = 1;
+              segsOut.push(item);
+            }
+          }
+          if (segsOut.length) next.g = segsOut.slice(0, MAX_SEGS);
           if (next.e > next.s) putEntry(id, next);
         }
         render();

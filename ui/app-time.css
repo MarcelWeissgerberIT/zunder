@@ -562,6 +562,18 @@ main {
   background: color-mix(in srgb, var(--muted) 55%, transparent);
 }
 
+/* Benannte Abschnitte im Zeitstrahl: eigene Farbe; herausgerechnete blasser. */
+.entry .track .seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--seg, var(--accent));
+}
+
+.entry .track .seg.cut {
+  opacity: 0.5;
+}
+
 /* Kleine Marke vor der Notiz: „Pause 0:30“, „läuft weiter“. */
 .entry .mark {
   margin-right: 8px;
@@ -571,6 +583,13 @@ main {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Marke eines benannten Abschnitts: in seiner Farbe umrandet. */
+.entry .mark.seg {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--seg, var(--line));
+  color: var(--seg, var(--muted));
 }
 
 /* Diesen Eintrag führt die Uhr gerade weiter. */
@@ -754,6 +773,54 @@ main {
 .editor .brk-rm svg {
   width: 15px;
   height: 15px;
+}
+
+/* Freie Abschnitte (z. B. Fahrzeit): Farbpunkt, Name, Von/Bis, Schalter „herausrechnen". */
+.editor .segs {
+  margin-top: 2px;
+}
+
+.editor .seg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor .seg-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--seg, var(--muted));
+}
+
+.editor .seg-name {
+  flex: 1;
+  min-width: 72px;
+}
+
+.editor .seg-row .tf {
+  width: 84px;
+  flex: none;
+}
+
+.editor .seg-cut {
+  flex: none;
+  height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.editor .seg-cut.on {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--accent);
 }
 
 .editor .actions {
