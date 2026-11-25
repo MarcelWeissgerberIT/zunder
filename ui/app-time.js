@@ -1944,12 +1944,22 @@
       return /[";\n\r]/.test(content) ? '"' + content.replace(/"/g, '""') + '"' : content;
     };
     const decimal = (minutes) => (minutes / 60).toFixed(2).replace('.', LANG === 'de' ? ',' : '.');
-    // Die Stunden sind gerundet; die Minuten daneben stimmen auf die Minute.
-    const rows = [[S.tm_col_date, S.tm_col_from, S.tm_col_until, S.tm_col_break, S.tm_col_hours, S.tm_col_minutes, S.tm_project, S.tm_note].map(cell).join(';')];
     const list = [...entries.values()].filter((entry) => entry.d.startsWith(prefix)).sort((left, right) => left.d.localeCompare(right.d) || left.s - right.s);
+    // Je vorkommendem Abschnitt-Namen eine eigene Spalte mit seinen Minuten je
+    // Zeile, sortiert, am Ende der festen Spalten. Ob ein Abschnitt herausgerechnet
+    // ist, steckt schon in der Arbeitszeit (Minuten/Stunden).
+    const segNames = [...new Set(list.flatMap((entry) => (entry.g || []).map((seg) => seg.n)))].sort((left, right) => left.localeCompare(right, LANG));
+    // Die Stunden sind gerundet; die Minuten daneben stimmen auf die Minute.
+    const head = [S.tm_col_date, S.tm_col_from, S.tm_col_until, S.tm_col_break, S.tm_col_hours, S.tm_col_minutes, S.tm_project, S.tm_note, ...segNames];
+    const rows = [head.map(cell).join(';')];
     for (const entry of list) {
       const project = projects.has(entry.p) ? projects.get(entry.p).name : '';
-      rows.push([entry.d, clock(entry.s), clock(entry.e), pauseOf(entry), decimal(worked(entry)), worked(entry), project, entry.n].map(cell).join(';'));
+      const line = [entry.d, clock(entry.s), clock(entry.e), pauseOf(entry), decimal(worked(entry)), worked(entry), project, entry.n];
+      for (const name of segNames) {
+        const minutes = (entry.g || []).filter((seg) => seg.n === name).reduce((sum, seg) => sum + (seg.e - seg.s), 0);
+        line.push(minutes || '');
+      }
+      rows.push(line.map(cell).join(';'));
     }
     // Das Zeichen am Anfang sagt Excel, dass die Datei in UTF-8 geschrieben ist.
     const mark = String.fromCharCode(0xfeff);
